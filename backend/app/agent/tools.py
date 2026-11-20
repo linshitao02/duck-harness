@@ -1339,7 +1339,6 @@ async def _spawn_agent(args: dict, ctx: ToolContext) -> ToolResult:
         origin_workspace=root,
         history_batch=ctx.history_batch,
     )
-    provider = ctx.hub.resolve(ctx.provider_name, ctx.db)
     run_id = resume if saved else new_run_id()
     child.agent_run_id = run_id
     if saved:
@@ -1356,26 +1355,35 @@ async def _spawn_agent(args: dict, ctx: ToolContext) -> ToolResult:
         allowed.extend(name for name in spec.tools if str(name).startswith("mcp__") and name not in allowed)
     default_steps = spec.max_turns or (40 if spec.name == "explore" else 200)
     steps = int(args.get("max_steps") or default_steps)
+
+    async def run_child() -> str:
+        session = None
+        try:
+            if ctx.db is not None:
+                from ..db import open_session
+
+                session = open_session()
+                child.db = session
+            provider = ctx.hub.resolve(ctx.provider_name, child.db)
+            return await run_loop(
+                messages,
+                provider,
+                child,
+                max_steps=steps,
+                allowed=allowed,
+            )
+        finally:
+            if session is not None:
+                session.close()
+
     if args.get("run_in_background"):
         job_id = uuid.uuid4().hex[:8]
         JOBS[job_id] = {"kind": "agent", "done": False, "text": "", "code": None, "command": task, "notified": False}
         tag_job(JOBS[job_id], ctx)
 
         async def work() -> None:
-            session = None
             try:
-                if ctx.db is not None:
-                    from ..db import open_session
-
-                    session = open_session()
-                    child.db = session
-                final_text = await run_loop(
-                    messages,
-                    provider,
-                    child,
-                    max_steps=steps,
-                    allowed=allowed,
-                )
+                final_text = await run_child()
                 save_run(root, run_id, spec.name, messages)
                 JOBS[job_id]["text"] = final_text or "子代理没有给出结果"
                 JOBS[job_id]["code"] = 0
@@ -1384,18 +1392,10 @@ async def _spawn_agent(args: dict, ctx: ToolContext) -> ToolResult:
                 JOBS[job_id]["code"] = 1
             finally:
                 JOBS[job_id]["done"] = True
-                if session is not None:
-                    session.close()
 
         asyncio.create_task(work())
         return ToolResult(True, f"子代理 {run_id}（{spec.name}）已在后台运行，结束后会通知，不用轮询。任务编号 #{job_id}")
-    final = await run_loop(
-        messages,
-        provider,
-        child,
-        max_steps=steps,
-        allowed=allowed,
-    )
+    final = await run_child()
     save_run(root, run_id, spec.name, messages)
     body = clip(final or "子代理没有给出结果")
     return ToolResult(True, f"子代理 {run_id}（{spec.name}）\n{body}")
@@ -1593,7 +1593,7 @@ REGISTRY: list[Tool] = [
         "agent 可以是 general、explore、plan，或 .harness/agents 与 .claude/agents 里的名字。不填则用 general。explore 只读，plan 只写计划，general 可以改代码，并且还能再派一层 explore 或 plan。"
         "已知文件路径、两三个文件里的内容、或一次就能定位的类名，直接用 read_file、glob_files 或 grep，不要派子代理。一次直接查找不够，或明显要超过 3 次查询时，再用 explore。"
         "task 要写清目的、已经看过的情况、是改代码还是只做调查，以及具体改什么。子代理从零开始，看不到这段对话。它的结果用户看不到，一般可以采信，你要用中文转述要点。"
-        "下一步要等结果才能继续时用前台，不要设 run_in_background。彼此独立、可以同时做的调查才放后台，或在同一轮并行派出。后台结束后会通知，不用轮询。返回里的 id 用于 resume，也可以用 send_message 把话送到这个 id。",
+        "下一步要等结果才能继续时用前台，不要设 run_in_background。彼此独立的 explore 或 plan 放在同一轮会一起执行，同时最多 10 个。general 会等正在进行的改动结束。可以同时做、又不急着要结果的调查才设 run_in_background。后台结束后会通知，不用轮询。返回里的 id 用于 resume，也可以用 send_message 把话送到这个 id。",
         _object(
             {
                 "task": _prop("string", "交给子代理的任务。它看不到这段对话，要写清目的、已经看过的情况和具体改什么。"),

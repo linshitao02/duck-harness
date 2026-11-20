@@ -58,6 +58,66 @@ def test_streaming_executor_serializes_mutations():
     assert order == [("start", "a"), ("end", "a"), ("start", "b"), ("end", "b")]
 
 
+def test_readonly_subagents_overlap_and_general_waits():
+    from app.agent.executor import is_concurrency_safe
+
+    assert is_concurrency_safe("spawn_agent", {"agent": "Explore"})
+    assert is_concurrency_safe("spawn_agent", {"subagent_type": "plan"})
+    assert not is_concurrency_safe("spawn_agent", {"agent": "general"})
+    assert not is_concurrency_safe("spawn_agent", {"resume": "abc"})
+    order = []
+
+    async def runner(item):
+        order.append(("start", item["id"]))
+        await asyncio.sleep(0.05)
+        order.append(("end", item["id"]))
+        return ToolResult(True, item["id"])
+
+    async def scenario():
+        executor = StreamingToolExecutor(ToolContext(None, Path("."), None, "auto", None, None, "p", "m"), runner=runner)
+        await executor.add({"id": "e1", "name": "spawn_agent", "arguments": {"agent": "explore", "task": "看结构"}})
+        await executor.add({"id": "p1", "name": "spawn_agent", "arguments": {"agent": "plan", "task": "写方案"}})
+        await executor.add({"id": "g1", "name": "spawn_agent", "arguments": {"agent": "general", "task": "改代码"}})
+        await executor.add({"id": "e2", "name": "spawn_agent", "arguments": {"agent": "explore", "task": "再看一眼"}})
+        return await executor.finish()
+
+    asyncio.run(scenario())
+    assert order.index(("start", "p1")) < order.index(("end", "e1"))
+    assert order.index(("end", "e1")) < order.index(("start", "g1"))
+    assert order.index(("end", "p1")) < order.index(("start", "g1"))
+    assert order.index(("end", "g1")) < order.index(("start", "e2"))
+
+
+def test_concurrent_tools_stop_at_ten():
+    from app.agent.executor import MAX_TOOL_USE_CONCURRENCY
+
+    started = []
+    release = asyncio.Event()
+
+    async def runner(item):
+        started.append(item["id"])
+        await release.wait()
+        return ToolResult(True, item["id"])
+
+    async def scenario():
+        executor = StreamingToolExecutor(ToolContext(None, Path("."), None, "auto", None, None, "p", "m"), runner=runner)
+        for index in range(MAX_TOOL_USE_CONCURRENCY):
+            await executor.add({"id": str(index), "name": "read_file", "arguments": {}})
+        for _ in range(50):
+            if len(started) >= MAX_TOOL_USE_CONCURRENCY:
+                break
+            await asyncio.sleep(0.01)
+        extra = asyncio.create_task(executor.add({"id": "extra", "name": "grep", "arguments": {}}))
+        await asyncio.sleep(0.05)
+        blocked = len(started) == MAX_TOOL_USE_CONCURRENCY and "extra" not in started
+        release.set()
+        await extra
+        await executor.finish()
+        return blocked
+
+    assert asyncio.run(scenario()) is True
+
+
 def test_provider_retries_429_then_reads_cache_usage():
     calls = {"n": 0}
 
@@ -411,6 +471,7 @@ def test_prompts_follow_clawd_sections():
     assert "对得上某个子代理的说明" in text
     assert "超过 3 次查询" in text
     assert "用前台" in text and "run_in_background" in text
+    assert "explore 和 plan 会一起执行" in text
 
     explore = instructions("explore")
     plan = instructions("plan")
@@ -429,6 +490,7 @@ def test_prompts_follow_clawd_sections():
     assert "用户看不到" in description
     assert "超过 3 次查询" in description
     assert "用前台" in description
+    assert "一起执行" in description
 
 
 def test_large_output_is_saved_and_skills_take_arguments(ctx):

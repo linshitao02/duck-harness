@@ -1,6 +1,7 @@
 """模型还在输出时就开始跑已经解析完的工具。
 
-只读工具可以彼此并行。会改文件、跑命令的工具要等正在跑的工具结束，并且单独执行。
+只读工具，以及只读的 explore、plan 子代理，可以彼此并行，同时最多 10 个。
+会改文件、跑命令，或 general 子代理，要等正在跑的工具结束，并且单独执行。
 结果仍按模型给出的顺序交回。
 """
 
@@ -8,6 +9,7 @@ import asyncio
 
 from .tools import ToolResult, execute
 
+MAX_TOOL_USE_CONCURRENCY = 10
 READONLY = {
     "read_file",
     "glob_files",
@@ -29,8 +31,18 @@ READONLY = {
 }
 
 
-def is_concurrency_safe(name: str) -> bool:
-    return name in READONLY
+def is_concurrency_safe(name: str, arguments: dict | None = None) -> bool:
+    if name in READONLY:
+        return True
+    if name != "spawn_agent":
+        return False
+    args = arguments or {}
+    if str(args.get("resume") or "").strip() and not (args.get("agent") or args.get("subagent_type")):
+        return False
+    from .agents import normalize_kind
+
+    kind = normalize_kind(str(args.get("agent") or args.get("subagent_type") or ""))
+    return kind in {"explore", "plan"}
 
 
 class StreamingToolExecutor:
@@ -54,7 +66,8 @@ class StreamingToolExecutor:
         self.items.append(item)
         if self._stopped():
             return
-        if is_concurrency_safe(item["name"]) and not self._exclusive:
+        if is_concurrency_safe(item["name"], item.get("arguments")) and not self._exclusive:
+            await self._acquire_slot()
             self._inflight.append(asyncio.create_task(self._run(item)))
             return
         self._exclusive = True
@@ -72,6 +85,14 @@ class StreamingToolExecutor:
                 result = ToolResult(False, "这次请求被中断了")
             ordered.append(result)
         return ordered
+
+    async def _acquire_slot(self) -> None:
+        while True:
+            pending = [task for task in self._inflight if not task.done()]
+            self._inflight = pending
+            if len(pending) < MAX_TOOL_USE_CONCURRENCY:
+                return
+            await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 
     async def _wait(self) -> None:
         pending = [task for task in self._inflight if not task.done()]

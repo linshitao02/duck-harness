@@ -672,13 +672,13 @@ def register(registry: list) -> None:
             ),
             Tool(
                 "enter_worktree",
-                "在 git 仓库里新建隔离工作树并切换过去，避免直接改当前检出。",
+                "只在用户明确说工作树或 worktree 时使用。修 bug、加功能、新建分支、切换分支都不要调用。在 git 仓库里新建隔离工作树并切换过去。",
                 _object({"name": _prop("string", "工作树名称。不填则使用 task。")}, []),
                 _enter_worktree,
             ),
             Tool(
                 "exit_worktree",
-                "离开工作树，回到原来的工作区并移除该工作树。",
+                "只在用户明确要求离开工作树时调用。做完不要自己退出。回到原来的工作区并移除该工作树。",
                 _object({}, []),
                 _exit_worktree,
             ),

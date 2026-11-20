@@ -407,6 +407,10 @@ def test_prompts_follow_clawd_sections():
     assert "不要估计要花多久" in text
     assert "C:\\work" in text
     assert "别的会话互不影响" in text and "环境变量不跨命令保留" in text
+    assert "只在用户明确说工作树或 worktree 时使用" in text
+    assert "对得上某个子代理的说明" in text
+    assert "超过 3 次查询" in text
+    assert "用前台" in text and "run_in_background" in text
 
     explore = instructions("explore")
     plan = instructions("plan")
@@ -423,6 +427,8 @@ def test_prompts_follow_clawd_sections():
     description = spawn["function"]["description"]
     assert "不要派子代理" in description
     assert "用户看不到" in description
+    assert "超过 3 次查询" in description
+    assert "用前台" in description
 
 
 def test_large_output_is_saved_and_skills_take_arguments(ctx):

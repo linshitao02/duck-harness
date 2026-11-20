@@ -13,6 +13,13 @@ def tag_job(job: dict, ctx) -> None:
     job["notified"] = False
 
 
+def same_conversation(job: dict, ctx) -> bool:
+    current = getattr(ctx, "conversation_id", None)
+    if current is None:
+        return True
+    return job.get("conversation_id") == current
+
+
 def _owns(job: dict, ctx) -> bool:
     return (
         job.get("conversation_id") == getattr(ctx, "conversation_id", None)

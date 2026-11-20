@@ -214,10 +214,10 @@ async def _bash(args: dict, ctx: ToolContext) -> ToolResult:
     if args.get("run_in_background"):
         return await _bash_background(command, ctx)
     timeout = _command_timeout(args.get("timeout"))
-    from .shell_session import run_shell
+    from .shell_session import run_shell, shell_key
 
     try:
-        code, text = await run_shell(ctx.workspace, command, timeout)
+        code, text = await run_shell(ctx.workspace, command, timeout, shell_key(ctx.workspace, ctx.conversation_id, ctx.agent_run_id))
     except TimeoutError:
         return ToolResult(False, f"命令超时（{timeout} 秒）")
     except RuntimeError as exc:
@@ -226,10 +226,13 @@ async def _bash(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def _bash_background(command: str, ctx: ToolContext) -> ToolResult:
+    from .shell_session import current_cwd, shell_key
+
     argv, env = _powershell_argv(command)
+    cwd = current_cwd(ctx.workspace, shell_key(ctx.workspace, ctx.conversation_id, ctx.agent_run_id))
     proc = await asyncio.create_subprocess_exec(
         *argv,
-        cwd=str(ctx.workspace),
+        cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -969,7 +972,7 @@ async def _task_write(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(False, "status 只能是 pending、in_progress、done、cancelled")
     if task_id:
         row = ctx.db.get(Task, int(task_id))
-        if row is None:
+        if row is None or (ctx.conversation_id is not None and row.conversation_id != ctx.conversation_id):
             return ToolResult(False, "任务不存在")
         if title:
             row.title = title

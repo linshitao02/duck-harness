@@ -18,6 +18,24 @@ _locks: dict[str, asyncio.Lock] = {}
 _live: dict[int, asyncio.subprocess.Process] = {}
 
 
+def shell_key(workspace: Path, conversation_id: int | None, agent_run_id: str = "") -> str:
+    """同一工作区里，每个会话记住自己的当前目录。子代理不带动主会话的目录。"""
+    try:
+        convo = str(int(conversation_id)) if conversation_id is not None else "0"
+    except (TypeError, ValueError):
+        convo = "0"
+    agent = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (agent_run_id or "main"))[:40] or "main"
+    return f"{workspace.resolve()}|{convo}|{agent}"
+
+
+def current_cwd(workspace: Path, key: str) -> Path:
+    root = workspace.resolve()
+    cwd = _cwd.get(key, root)
+    if not cwd.is_dir():
+        return root
+    return cwd
+
+
 def child_env() -> dict[str, str]:
     """子进程的 python 使用正在跑服务的解释器，避免落到 Anaconda 主环境。"""
     env = os.environ.copy()
@@ -137,15 +155,13 @@ async def _run_once(cwd: Path, command: str, timeout: int, cwd_file: Path) -> tu
         _unlink(script_path)
 
 
-async def run_shell(workspace: Path, command: str, timeout: int) -> tuple[int, str]:
+async def run_shell(workspace: Path, command: str, timeout: int, session_key: str | None = None) -> tuple[int, str]:
     root = workspace.resolve()
-    key = str(root)
+    key = session_key or shell_key(workspace, None)
     cwd_file = _temp("duck-pwd-", ".txt")
     try:
         async with _lock(key):
-            cwd = _cwd.get(key, root)
-            if not cwd.is_dir():
-                cwd = root
+            cwd = current_cwd(root, key)
             code, text = await _run_once(cwd, command, timeout, cwd_file)
             _remember_cwd(key, cwd_file, cwd)
             return code, text

@@ -73,7 +73,7 @@ def agent_system_prompt(spec: AgentSpec, workspace: Path | None, plan_path: str 
     notes = (
         f"工作区：{root}\n"
         f"系统：{platform.platform()}\n"
-        "终端是持续的 PowerShell，工作目录是这个工作区。同一会话里上一条命令设置的环境变量还在。\n"
+        "终端每条命令新开一次 PowerShell。同一会话里，下一条命令接着上一条的目录，别的会话互不影响。环境变量不跨命令保留。\n"
         "最终报告里给出相关文件的绝对路径。只在原文本身是结论时贴代码，例如出错的那几行或调用方要的函数签名，不要复述只是读过的代码。\n"
         "不要用表情符号。工具调用前的句子用句号结束，不要用冒号。"
     )

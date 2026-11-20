@@ -266,9 +266,30 @@ async def _todo_write(args: dict, ctx: ToolContext) -> ToolResult:
     return ToolResult(True, "\n".join(f"#{row.id} [{row.status}] {row.title}" for row in listed) or "待办已清空")
 
 
+def _conversation_token(conversation_id: int | None) -> str:
+    try:
+        return str(int(conversation_id)) if conversation_id is not None else "0"
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _worktree_slug(raw: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in raw)[:40].strip(".-")
+    return cleaned or "task"
+
+
+def _own_job(ctx: ToolContext, job_id: str) -> dict | None:
+    from .state import same_conversation
+
+    job = JOBS.get(job_id)
+    if job is None or not same_conversation(job, ctx):
+        return None
+    return job
+
+
 async def _task_output(args: dict, ctx: ToolContext) -> ToolResult:
     job_id = str(args.get("id") or args.get("task_id") or args.get("job_id") or args.get("shell_id") or "").lstrip("#").strip()
-    job = JOBS.get(job_id)
+    job = _own_job(ctx, job_id)
     if job is None:
         return ToolResult(False, "没有这个后台任务")
     if not job.get("done"):
@@ -279,7 +300,7 @@ async def _task_output(args: dict, ctx: ToolContext) -> ToolResult:
 
 async def _task_stop(args: dict, ctx: ToolContext) -> ToolResult:
     job_id = str(args.get("id") or args.get("task_id") or args.get("job_id") or args.get("shell_id") or "").lstrip("#").strip()
-    job = JOBS.get(job_id)
+    job = _own_job(ctx, job_id)
     if job is None:
         return ToolResult(False, "没有这个后台任务")
     proc = job.get("proc")
@@ -310,7 +331,7 @@ async def _list_schedules(args: dict, ctx: ToolContext) -> ToolResult:
 
 async def _cancel_schedule(args: dict, ctx: ToolContext) -> ToolResult:
     row = ctx.db.get(Schedule, int(args.get("id") or 0))
-    if row is None:
+    if row is None or (ctx.conversation_id is not None and row.conversation_id != ctx.conversation_id):
         return ToolResult(False, "没有这个定时任务")
     row.enabled = False
     row.next_run = None
@@ -390,13 +411,13 @@ async def _enter_worktree(args: dict, ctx: ToolContext) -> ToolResult:
     code, text = await _git(ctx, "rev-parse", "--is-inside-work-tree")
     if code != 0:
         return ToolResult(False, "当前工作区不是 git 仓库，不能建工作树")
-    name = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in str(args.get("name") or "task"))[:40] or "task"
-    target = ctx.origin_workspace / ".harness" / "worktrees" / name
+    name = _worktree_slug(str(args.get("name") or "task"))
+    target = ctx.origin_workspace / ".harness" / "worktrees" / _conversation_token(ctx.conversation_id) / name
     if target.exists():
         ctx.workspace = target
         return ToolResult(True, f"工作树已存在，已切到 {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    code, text = await _git(ctx, "worktree", "add", "-b", f"harness/{name}", str(target), "HEAD")
+    code, text = await _git(ctx, "worktree", "add", "-b", f"harness/{_conversation_token(ctx.conversation_id)}/{name}", str(target), "HEAD")
     if code != 0:
         return ToolResult(False, text or "创建工作树失败")
     ctx.workspace = target

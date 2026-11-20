@@ -580,3 +580,113 @@ def test_subagent_compacts_again_after_a_tool_batch(ctx):
     assert text == "完成"
     assert index == 5
     assert compacts >= 2
+
+
+def _two_conversations(ctx, db):
+    rows = []
+    for title in ("甲", "乙"):
+        row = Conversation(
+            title=title,
+            provider="deepseek",
+            model="deepseek-chat",
+            permission_mode="auto",
+            workspace=str(ctx.workspace),
+        )
+        db.add(row)
+        db.commit()
+        rows.append(replace(ctx, conversation_id=row.id))
+    return rows
+
+
+def test_shell_directory_stays_in_one_conversation(ctx, db):
+    folder = ctx.workspace / "only-a"
+    folder.mkdir()
+    quoted = str(folder).replace("'", "''")
+
+    async def scenario():
+        first, second = _two_conversations(ctx, db)
+        moved = await execute("bash", {"command": f"Set-Location -LiteralPath '{quoted}'", "timeout": 20}, first)
+        stayed = await execute("bash", {"command": "(Get-Location).Path", "timeout": 20}, second)
+        followed = await execute("bash", {"command": "(Get-Location).Path", "timeout": 20}, first)
+        child = replace(first, depth=1, agent_run_id="run9")
+        child_pwd = await execute("bash", {"command": "(Get-Location).Path", "timeout": 20}, child)
+        return moved, stayed, followed, child_pwd
+
+    moved, stayed, followed, child_pwd = asyncio.run(scenario())
+    assert moved.ok and followed.ok and stayed.ok and child_pwd.ok
+    assert str(folder).lower() in followed.text.lower()
+    assert str(folder).lower() not in stayed.text.lower()
+    assert str(ctx.workspace.resolve()).lower() in stayed.text.lower()
+    assert str(folder).lower() not in child_pwd.text.lower()
+
+
+def test_jobs_tasks_and_schedules_stay_in_one_conversation(ctx, db):
+    async def scenario():
+        first, second = _two_conversations(ctx, db)
+        started = await execute("bash", {"command": "Start-Sleep -Seconds 30", "run_in_background": True}, first)
+        job_id = started.text.split("#", 1)[1].strip()
+        foreign_output = await execute("task_output", {"id": job_id}, second)
+        foreign_stop = await execute("task_stop", {"id": job_id}, second)
+        still = await execute("task_output", {"id": job_id}, first)
+        stopped = await execute("task_stop", {"id": job_id}, first)
+        made = await execute("task_write", {"title": "只属于甲", "status": "pending"}, first)
+        task_id = int(made.text.split("#", 1)[1].split()[0])
+        foreign_task = await execute("task_write", {"id": task_id, "status": "done"}, second)
+        scheduled = await execute("schedule_task", {"prompt": "甲的提醒", "every_seconds": 3600}, first)
+        schedule_id = int(scheduled.text.split("#", 1)[1].split("，", 1)[0])
+        foreign_schedule = await execute("cancel_schedule", {"id": schedule_id}, second)
+        own_schedule = await execute("cancel_schedule", {"id": schedule_id}, first)
+        return started, foreign_output, foreign_stop, still, stopped, foreign_task, foreign_schedule, own_schedule
+
+    started, foreign_output, foreign_stop, still, stopped, foreign_task, foreign_schedule, own_schedule = asyncio.run(scenario())
+    assert started.ok and stopped.ok and own_schedule.ok
+    assert not foreign_output.ok and not foreign_stop.ok and not foreign_task.ok and not foreign_schedule.ok
+    assert "仍在运行" in still.text
+
+
+def test_worktrees_stay_in_one_conversation(ctx, db):
+    import shutil
+
+    if shutil.which("git") is None:
+        import pytest
+
+        pytest.skip("没有 git")
+
+    async def git(*args):
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            cwd=str(ctx.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        return proc.returncode
+
+    async def scenario():
+        code = await git("init")
+        if code != 0:
+            return "skip"
+        (ctx.workspace / "README.md").write_text("base\n", encoding="utf-8")
+        await git("add", "README.md")
+        code = await git("-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "base")
+        if code != 0:
+            return "skip"
+        first, second = _two_conversations(ctx, db)
+        entered_first = await execute("enter_worktree", {"name": "same"}, first)
+        entered_second = await execute("enter_worktree", {"name": "same"}, second)
+        if entered_first.ok:
+            await execute("exit_worktree", {}, first)
+        if entered_second.ok:
+            await execute("exit_worktree", {}, second)
+        return entered_first, entered_second, first.conversation_id, second.conversation_id
+
+    result = asyncio.run(scenario())
+    if result == "skip":
+        import pytest
+
+        pytest.skip("git 仓库没有准备好")
+    entered_first, entered_second, first_id, second_id = result
+    assert entered_first.ok and entered_second.ok
+    assert str(ctx.workspace / ".harness" / "worktrees" / str(first_id) / "same") in entered_first.text
+    assert str(ctx.workspace / ".harness" / "worktrees" / str(second_id) / "same") in entered_second.text

@@ -17,7 +17,7 @@ def system_prompt(info: dict) -> str:
 计划文件：{info.get("plan_file") or ".harness/plans/{会话号}.md"}
 当前模型：{info.get("provider")} / {info.get("model")}
 Git HEAD：{info.get("git") or "（不是 git 仓库或没有 HEAD）"}
-终端是持续的 PowerShell，工作目录是当前工作区。同一会话里上一条命令设置的环境变量还在。
+终端每条命令新开一次 PowerShell。同一会话里，下一条命令接着上一条的目录，别的会话互不影响。环境变量不跨命令保留。
 
 权限：
 - auto：直接执行。

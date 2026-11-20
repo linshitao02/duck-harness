@@ -406,6 +406,7 @@ def test_prompts_follow_clawd_sections():
     assert "文件路径:行号" in text
     assert "不要估计要花多久" in text
     assert "C:\\work" in text
+    assert "别的会话互不影响" in text and "环境变量不跨命令保留" in text
 
     explore = instructions("explore")
     plan = instructions("plan")

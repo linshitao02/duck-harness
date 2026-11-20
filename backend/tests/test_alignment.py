@@ -411,7 +411,8 @@ def test_prompts_follow_clawd_sections():
     plan = instructions("plan")
     general = instructions("general")
     assert "禁止" in explore and "glob_files" in explore
-    assert ".harness/plan.md" in plan and "3 到 5" in plan
+    assert ".harness/plans/" in plan and "3 到 5" in plan
+    assert ".harness/plans/" in text
     assert "不要镀金" in general
     wrapped = agent_system_prompt(type("S", (), {"prompt": explore})(), None)
     assert "绝对路径" in wrapped

@@ -21,13 +21,10 @@ from .tools import (
     _servers,
     clip,
     guard_path,
+    plan_display,
+    plan_file,
     resolve_path,
 )
-
-
-def _plan_path(ctx: ToolContext) -> Path:
-    root = ctx.origin_workspace or ctx.workspace
-    return root / ".harness" / "plan.md"
 
 
 async def _persist_mode(ctx: ToolContext, mode: str) -> None:
@@ -81,14 +78,14 @@ async def _enter_plan_mode(args: dict, ctx: ToolContext) -> ToolResult:
     if ctx.depth:
         return ToolResult(False, "子代理不能切换主会话的计划模式")
     if ctx.permission_mode == "plan":
-        return ToolResult(True, f"已经在计划模式。请把方案写到 {_plan_path(ctx)}")
+        return ToolResult(True, f"已经在计划模式。请把方案写到 {plan_display(ctx)}")
     key = ctx.conversation_id or 0
     PLAN_RETURN[key] = ctx.permission_mode or "auto"
     await _persist_mode(ctx, "plan")
     return ToolResult(
         True,
         "已进入计划模式。现在只能查看，以及写入 "
-        f"{_plan_path(ctx)}。看清楚后再调用 exit_plan_mode 请用户批准。",
+        f"{plan_display(ctx)}。看清楚后再调用 exit_plan_mode 请用户批准。",
     )
 
 
@@ -97,7 +94,7 @@ async def _exit_plan_mode(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(False, "子代理不能退出计划模式")
     if ctx.permission_mode != "plan":
         return ToolResult(False, "当前不是计划模式")
-    path = _plan_path(ctx)
+    path = plan_file(ctx)
     supplied = args.get("plan")
     if supplied:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -555,15 +552,15 @@ def register(registry: list) -> None:
             ),
             Tool(
                 "enter_plan_mode",
-                "任务需要先设计再改代码时进入计划模式。进入后只能查看，并把方案写到 .harness/plan.md。",
+                "任务需要先设计再改代码时进入计划模式。进入后只能查看，并把方案写到当前会话自己的 .harness/plans/{会话号}.md。",
                 _object({}, []),
                 _enter_plan_mode,
                 True,
             ),
             Tool(
                 "exit_plan_mode",
-                "计划已经写进 .harness/plan.md 后调用，请用户批准。批准前不要改业务代码。也可以用 plan 参数把方案直接写入该文件。",
-                _object({"plan": _prop("string", "要写入 .harness/plan.md 的方案。不填则使用已经写好的文件。")}, []),
+                "计划已经写进当前会话自己的计划文件后调用，请用户批准。批准前不要改业务代码。也可以用 plan 参数把方案直接写入该文件。",
+                _object({"plan": _prop("string", "要写入当前会话计划文件的方案。不填则使用已经写好的文件。")}, []),
                 _exit_plan_mode,
             ),
             Tool(

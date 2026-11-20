@@ -15,7 +15,7 @@ from .prompt import system_prompt
 from .providers import ModelFallback, hub
 from .shrink import shrink_tool_results
 from .state import jobs_pending, take_job_notices
-from .tools import ToolContext, broker, execute, load_skills, schemas
+from .tools import ToolContext, broker, execute, load_skills, plan_filename, schemas
 
 PARALLEL_TOOLS = {"read_file", "glob_files", "grep", "list_dir", "git_summary", "system_info", "web_search", "web_fetch"}
 # 主对话一直转到模型不再调用工具、停止钩子放行，或用户中断。步数只限制显式传入 max_steps 的子代理。
@@ -437,6 +437,7 @@ def build_model_messages(db, conversation, workspace: Path) -> list[dict]:
         "workspace": str(workspace),
         "platform": __import__("platform").platform(),
         "permission_mode": conversation.permission_mode,
+        "plan_file": f".harness/plans/{plan_filename(conversation.id)}",
         "provider": conversation.provider,
         "model": conversation.model,
         "memories": memory_prompt(workspace),

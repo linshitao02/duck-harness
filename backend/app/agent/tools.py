@@ -1337,17 +1337,17 @@ async def _spawn_agent(args: dict, ctx: ToolContext) -> ToolResult:
         history_batch=ctx.history_batch,
     )
     provider = ctx.hub.resolve(ctx.provider_name, ctx.db)
+    run_id = resume if saved else new_run_id()
+    child.agent_run_id = run_id
     if saved:
         messages = list(saved["messages"])
         messages.append({"role": "user", "content": task or "继续上次未完成的部分。"})
-        run_id = resume
     else:
+        plan_path = plan_display(child) if spec.name == "plan" or (mode == "plan" and spec.name != "explore") else None
         messages = [
-            {"role": "system", "content": agent_system_prompt(spec, root)},
+            {"role": "system", "content": agent_system_prompt(spec, root, plan_path)},
             {"role": "user", "content": task},
         ]
-        run_id = new_run_id()
-    child.agent_run_id = run_id
     allowed = [tool.name for tool in select(spec.name, REGISTRY, spec)]
     if spec.tools:
         allowed.extend(name for name in spec.tools if str(name).startswith("mcp__") and name not in allowed)
@@ -1738,9 +1738,40 @@ PLAN_EXTRA = {"exit_plan_mode", "enter_plan_mode", "todo_write", "task_write", "
 EDITS_ASK = {"bash", "call_mcp_tool", "open_path", "schedule_task", "cancel_schedule", "enter_worktree", "exit_worktree"}
 
 
+def _plan_token(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in value).strip("-")
+    return (cleaned or "agent")[:40]
+
+
+def plan_filename(conversation_id: int | None, agent_run_id: str = "") -> str:
+    """主会话一份，子代理在同一会话号后加自己的编号，避免互相覆盖。"""
+    try:
+        convo = str(int(conversation_id)) if conversation_id is not None else "0"
+    except (TypeError, ValueError):
+        convo = "0"
+    if agent_run_id:
+        return f"{convo}-agent-{_plan_token(agent_run_id)}.md"
+    return f"{convo}.md"
+
+
+def plan_file(ctx: ToolContext) -> Path:
+    root = ctx.origin_workspace or ctx.workspace
+    return root / ".harness" / "plans" / plan_filename(ctx.conversation_id, ctx.agent_run_id)
+
+
+def plan_display(ctx: ToolContext) -> str:
+    path = plan_file(ctx)
+    try:
+        return path.resolve().relative_to(ctx.workspace.resolve()).as_posix()
+    except (OSError, ValueError):
+        return str(path)
+
+
 def is_plan_file(ctx: ToolContext, raw: str) -> bool:
-    path = resolve_path(ctx.workspace, raw or "")
-    plan = (ctx.origin_workspace or ctx.workspace) / ".harness" / "plan.md"
+    if not str(raw or "").strip():
+        return False
+    path = resolve_path(ctx.workspace, raw)
+    plan = plan_file(ctx)
     try:
         return path.resolve() == plan.resolve()
     except OSError:
@@ -1859,7 +1890,7 @@ async def execute(name: str, arguments: dict, ctx: ToolContext) -> ToolResult:
 
     mode = canonical_mode(ctx.permission_mode)
     if mode == "plan" and not _plan_allows(name, tool, arguments, ctx):
-        return ToolResult(False, "计划模式只允许查看，这次操作被拦住了")
+        return ToolResult(False, f"计划模式只允许查看，这次操作被拦住了。方案只能写入 {plan_display(ctx)}")
     hook = await before_tool(root, name, arguments)
     if hook.block:
         return ToolResult(False, hook.block)

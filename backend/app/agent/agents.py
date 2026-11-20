@@ -49,11 +49,12 @@ def instructions(kind: str) -> str:
     if kind == "plan":
         return (
             "你是方案子代理。先把代码库看清，再设计实施步骤。\n"
-            "除了把方案写入工作区的 .harness/plan.md，禁止新建、修改、删除、移动或复制其他文件，"
+            "除了把方案写入系统说明里给出的当前计划文件，禁止新建、修改、删除、移动或复制其他文件，"
             "禁止用重定向或 here-string 写文件，禁止会改变系统状态的命令。不要再派子代理。\n"
             "过程：先读调用方给出的文件；用 glob_files、grep 和 read_file 找现有写法和相似功能，理清相关调用路径；"
             "bash 只用于只读操作。然后写出步骤、依赖顺序、取舍和可能的难点。\n"
-            "方案写进 .harness/plan.md。回复末尾用中文列出 3 到 5 个实现时最关键的文件路径，并说明方案要点。"
+            "方案写进 `.harness/plans/` 下这一份子代理自己的文件，不要覆盖主会话或其他子代理的计划。"
+            "回复末尾用中文列出 3 到 5 个实现时最关键的文件路径，并说明方案要点。"
         )
     return (
         "你是通用子代理。用现有工具把交给你的任务做完。不要镀金，也不要停在半成品。\n"
@@ -64,7 +65,7 @@ def instructions(kind: str) -> str:
     )
 
 
-def agent_system_prompt(spec: AgentSpec, workspace: Path | None) -> str:
+def agent_system_prompt(spec: AgentSpec, workspace: Path | None, plan_path: str | None = None) -> str:
     """子代理提示：角色说明，再加上和主会话相同的环境与报告约定。"""
     import platform
 
@@ -76,6 +77,8 @@ def agent_system_prompt(spec: AgentSpec, workspace: Path | None) -> str:
         "最终报告里给出相关文件的绝对路径。只在原文本身是结论时贴代码，例如出错的那几行或调用方要的函数签名，不要复述只是读过的代码。\n"
         "不要用表情符号。工具调用前的句子用句号结束，不要用冒号。"
     )
+    if plan_path:
+        notes += f"\n当前计划文件：{plan_path}\n方案只写入这个文件，不要写其他会话或子代理的计划。"
     return spec.prompt.strip() + "\n\n" + notes
 
 
@@ -83,7 +86,7 @@ def _builtin(name: str) -> AgentSpec:
     descriptions = {
         "general": "复杂调查、找代码和多步任务。前几次搜索没把握时交给它",
         "explore": "按模式找文件、按关键词搜代码、回答代码库怎么工作。任务里写明 quick、medium 或 very thorough",
-        "plan": "设计实现步骤、标出关键文件和取舍。方案写入 .harness/plan.md，不改业务代码",
+        "plan": "设计实现步骤、标出关键文件和取舍。方案写入 .harness/plans/ 下自己的那一份，不改业务代码",
     }
     kind = name if name in descriptions else "general"
     return AgentSpec(

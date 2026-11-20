@@ -49,7 +49,11 @@ def test_plan_mode_readonly_bash_and_plan_file(ctx, db):
         assert listed.ok and "plan-ok" in listed.text
         denied = await execute("bash", {"command": "New-Item nope.txt -ItemType File"}, local)
         assert not denied.ok
-        planned = await execute("write_file", {"path": ".harness/plan.md", "content": "先看再改"}, local)
+        planned = await execute(
+            "write_file",
+            {"path": f".harness/plans/{conversation.id}.md", "content": "先看再改"},
+            local,
+        )
         assert planned.ok
         blocked = await execute("write_file", {"path": "app.txt", "content": "x"}, local)
         assert not blocked.ok
@@ -64,8 +68,74 @@ def test_plan_mode_readonly_bash_and_plan_file(ctx, db):
         await waiter
         assert exited.ok
         assert local.permission_mode == "auto"
+        assert (ctx.workspace / ".harness" / "plans" / f"{conversation.id}.md").read_text(encoding="utf-8") == "先看再改"
 
     asyncio.run(scenario())
+
+
+def test_plan_files_do_not_cross_conversations(ctx, db):
+    async def scenario():
+        rows = []
+        for title in ("甲", "乙"):
+            row = Conversation(
+                title=title,
+                provider="deepseek",
+                model="deepseek-chat",
+                permission_mode="plan",
+                workspace=str(ctx.workspace),
+            )
+            db.add(row)
+            db.commit()
+            rows.append(row)
+        first = replace(ctx, conversation_id=rows[0].id, permission_mode="plan")
+        second = replace(ctx, conversation_id=rows[1].id, permission_mode="plan")
+        wrote_first = await execute(
+            "write_file",
+            {"path": f".harness/plans/{rows[0].id}.md", "content": "方案甲"},
+            first,
+        )
+        wrote_second = await execute(
+            "write_file",
+            {"path": f".harness/plans/{rows[1].id}.md", "content": "方案乙"},
+            second,
+        )
+        cross = await execute(
+            "write_file",
+            {"path": f".harness/plans/{rows[1].id}.md", "content": "覆盖乙"},
+            first,
+        )
+        legacy = await execute("write_file", {"path": ".harness/plan.md", "content": "旧位置"}, first)
+        child = replace(first, depth=1, agent_run_id="run1")
+        child_plan = f".harness/plans/{rows[0].id}-agent-run1.md"
+        child_write = await execute("write_file", {"path": child_plan, "content": "子方案"}, child)
+        child_parent = await execute(
+            "write_file",
+            {"path": f".harness/plans/{rows[0].id}.md", "content": "改主方案"},
+            child,
+        )
+
+        async def spy():
+            while not broker.pending:
+                await asyncio.sleep(0.01)
+            item = next(iter(broker.pending.values()))
+            preview = item.get("preview") or ""
+            broker.resolve(next(iter(broker.pending)), False)
+            return preview
+
+        waiter = asyncio.create_task(spy())
+        exited = await execute("exit_plan_mode", {}, first)
+        preview = await waiter
+        return wrote_first, wrote_second, cross, legacy, child_write, child_parent, exited, preview, rows
+
+    wrote_first, wrote_second, cross, legacy, child_write, child_parent, exited, preview, rows = asyncio.run(scenario())
+    assert wrote_first.ok and wrote_second.ok and child_write.ok
+    assert not cross.ok and not legacy.ok and not child_parent.ok
+    assert not exited.ok
+    assert "方案甲" in preview and "方案乙" not in preview
+    folder = ctx.workspace / ".harness" / "plans"
+    assert (folder / f"{rows[0].id}.md").read_text(encoding="utf-8") == "方案甲"
+    assert (folder / f"{rows[1].id}.md").read_text(encoding="utf-8") == "方案乙"
+    assert (folder / f"{rows[0].id}-agent-run1.md").read_text(encoding="utf-8") == "子方案"
 
 
 def test_ask_user_todo_notebook_and_grep(ctx, db):

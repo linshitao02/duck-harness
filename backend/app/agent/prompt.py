@@ -14,6 +14,7 @@ def system_prompt(info: dict) -> str:
 工作区：{info.get("workspace")}
 系统：{info.get("platform")}
 权限模式：{info.get("permission_mode")}
+计划文件：{info.get("plan_file") or ".harness/plans/{会话号}.md"}
 当前模型：{info.get("provider")} / {info.get("model")}
 Git HEAD：{info.get("git") or "（不是 git 仓库或没有 HEAD）"}
 终端是持续的 PowerShell，工作目录是当前工作区。同一会话里上一条命令设置的环境变量还在。
@@ -21,7 +22,7 @@ Git HEAD：{info.get("git") or "（不是 git 仓库或没有 HEAD）"}
 权限：
 - auto：直接执行。
 - edits：改文件不用再问，命令、MCP、打开文件和工作树仍要用户点允许。
-- plan：只能查看。例外是把方案写到 .harness/plan.md。看清楚后调用 exit_plan_mode，等用户批准再改别的文件。
+- plan：只能查看。例外是把方案写到上面给出的计划文件。看清楚后调用 exit_plan_mode，等用户批准再改别的文件。不要写同一工作区里其他会话或子代理的计划文件。
 - ask：修改类工具先等用户点允许。
 - dontAsk：该询问的操作直接拒绝，不再弹出确认。
 .harness/settings.json 或 settings.local.json 里的 permissions 可以按工具允许、拒绝或改为询问，例如 bash(git status*)。

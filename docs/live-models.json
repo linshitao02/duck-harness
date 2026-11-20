@@ -1,0 +1,32 @@
+{
+  "deepseek_chat": "收到",
+  "ollama_chat": {
+    "model": "qwen3:4b",
+    "text": "首先，用户要求：“只输出两个字：收到 /no_think”。这看起来有点混乱。让我仔细阅读。\n\n用户说：“只输出两个字"
+  },
+  "deepseek_tool": {
+    "ok": true,
+    "events": [
+      "user",
+      "start",
+      "tool_start",
+      "tool_end",
+      "start",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "token",
+      "done"
+    ],
+    "file": "harness-ok"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+.env
+data/
+frontend/dist/
+desktop/node_modules/
+*.log
+.DS_Store
+.idea/
+.harness/
+clawd-code/
+deepseek-harness-master/

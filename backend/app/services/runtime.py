@@ -1,0 +1,602 @@
+import logging
+import os
+import platform
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import httpx
+from sqlalchemy import func, or_, select, text
+
+from ..config import ROOT_DIR, get_settings
+from ..agent.diffutil import split_embedded_diff
+from ..models import (
+    Attachment,
+    Conversation,
+    McpServer,
+    Message,
+    Schedule,
+    Setting,
+    Skill,
+    Task,
+    UsageEvent,
+    User,
+)
+from .cost import estimate_cost
+from .seed import seed_if_empty
+
+logger = logging.getLogger("harness.runtime")
+
+PERMISSION_MODES = {"auto", "ask", "plan", "edits", "dontAsk"}
+
+SETTING_KEYS = {
+    "workspace",
+    "provider",
+    "model",
+    "permission_mode",
+    "user_name",
+    "max_steps",
+    "ollama_base",
+    "ollama_model",
+    "deepseek_model",
+    "deepseek_base",
+    "fallback_model",
+    "theme",
+    "accent",
+    "spellcheck",
+    "send_shortcut",
+    "font_family",
+    "font_size",
+}
+FONT_FAMILIES = {"grok", "dengxian", "yahei", "segoe", "sourcehan", "kaiti", "song"}
+FONT_SIZES = {"11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "22"}
+SECRET_KEYS = {"deepseek_api_key"}
+
+
+def default_map() -> dict[str, str]:
+    settings = get_settings()
+    has_key = bool(settings.deepseek_api_key)
+    return {
+        "workspace": os.environ.get("HARNESS_WORKSPACE", str(ROOT_DIR)),
+        "provider": "deepseek" if has_key else "ollama",
+        "model": "deepseek-chat" if has_key else "qwen3:4b",
+        "permission_mode": "auto",
+        "user_name": "用户",
+        "max_steps": "200",
+        "ollama_base": settings.ollama_base_url,
+        "ollama_model": "qwen3:4b",
+        "deepseek_model": "deepseek-chat",
+        "deepseek_base": settings.deepseek_base_url,
+        "fallback_model": "",
+        "theme": "system",
+        "accent": "#ff4b93",
+        "spellcheck": "1",
+        "send_shortcut": "enter",
+        "font_family": "grok",
+        "font_size": "17",
+    }
+
+
+def ensure_defaults(db) -> dict[str, str]:
+    if db.get(User, 1) is None:
+        db.add(User(id=1, name="用户"))
+    current = {row.name: row.value for row in db.scalars(select(Setting)).all()}
+    for key, value in default_map().items():
+        if key not in current:
+            db.add(Setting(name=key, value=value))
+            current[key] = value
+    user = db.get(User, 1)
+    if user and current.get("user_name") and user.name != current["user_name"]:
+        user.name = current["user_name"]
+    db.commit()
+    repair_workspaces(db, current)
+    return current
+
+
+def _is_dir(path: str | None) -> bool:
+    if not path:
+        return False
+    try:
+        return Path(path).is_dir()
+    except OSError:
+        return False
+
+
+def workspace_fallback() -> str:
+    preferred = os.environ.get("HARNESS_WORKSPACE") or str(ROOT_DIR)
+    if _is_dir(preferred):
+        return str(Path(preferred))
+    if _is_dir(str(ROOT_DIR)):
+        return str(ROOT_DIR)
+    return preferred
+
+
+def repair_workspaces(db, current: dict[str, str] | None = None) -> str:
+    """目录改名后，把已经不存在的工作区改到当前项目目录。"""
+    if current is None:
+        current = {row.name: row.value for row in db.scalars(select(Setting)).all()}
+    fallback = workspace_fallback()
+    if not _is_dir(fallback):
+        return current.get("workspace") or fallback
+    changed = False
+    if not _is_dir(current.get("workspace")):
+        _write_setting(db, current, "workspace", fallback)
+        changed = True
+    saved = current.get("workspace") or fallback
+    for row in db.scalars(select(Conversation)).all():
+        if row.workspace and not _is_dir(row.workspace):
+            row.workspace = saved
+            changed = True
+    if changed:
+        db.commit()
+    return saved
+
+
+def all_settings(db) -> dict[str, str]:
+    return ensure_defaults(db)
+
+
+def _write_setting(db, current: dict, key: str, value: str) -> None:
+    row = db.get(Setting, key)
+    if row is None:
+        db.add(Setting(name=key, value=value))
+    else:
+        row.value = value
+    current[key] = value
+
+
+def _clean_setting(key: str, value) -> str | None:
+    text = str(value if value is not None else "").strip()
+    if key == "theme" and text not in {"system", "light", "dark"}:
+        return None
+    if key == "send_shortcut" and text not in {"enter", "ctrl_enter"}:
+        return None
+    if key == "spellcheck":
+        return "0" if text in {"0", "false", "False"} else "1"
+    if key == "font_family" and text not in FONT_FAMILIES:
+        return None
+    if key == "font_size" and text not in FONT_SIZES:
+        return None
+    if key == "accent" and not (len(text) == 7 and text.startswith("#") and all(ch in "0123456789abcdefABCDEF" for ch in text[1:])):
+        return None
+    return text
+
+
+def canonical_mode(mode: str | None) -> str:
+    """把 clawd 的模式名收成这里使用的名字。空值按自动。"""
+    text = (mode or "").strip()
+    mapped = {
+        "acceptedits": "edits",
+        "bypasspermissions": "auto",
+        "default": "ask",
+        "dontask": "dontAsk",
+    }.get(text.lower())
+    if mapped:
+        return mapped
+    return text or "auto"
+
+
+def set_settings(db, values: dict) -> dict[str, str]:
+    current = ensure_defaults(db)
+    clear_key = values.get("clear_deepseek_key")
+    if clear_key is True or str(clear_key).lower() in {"1", "true"}:
+        _write_setting(db, current, "deepseek_api_key", "")
+    for key, value in values.items():
+        if key == "clear_deepseek_key":
+            continue
+        if key in SECRET_KEYS:
+            secret = str(value or "").strip()
+            if secret:
+                _write_setting(db, current, key, secret)
+            continue
+        if key not in SETTING_KEYS:
+            continue
+        if key == "permission_mode":
+            value = canonical_mode(str(value or ""))
+            if value not in PERMISSION_MODES:
+                continue
+        cleaned = _clean_setting(key, value)
+        if cleaned is None:
+            continue
+        _write_setting(db, current, key, cleaned)
+    if "user_name" in values:
+        user = db.get(User, 1)
+        if user:
+            user.name = str(values["user_name"])
+    db.commit()
+    return {key: value for key, value in current.items() if key not in SECRET_KEYS}
+
+
+def deepseek_credentials(db) -> tuple[str, str, str]:
+    stored = all_settings(db)
+    saved = (stored.get("deepseek_api_key") or "").strip()
+    env_key = (get_settings().deepseek_api_key or "").strip()
+    key = saved or env_key
+    source = "settings" if saved else ("env" if env_key else "")
+    base = (stored.get("deepseek_base") or "").strip() or get_settings().deepseek_base_url
+    return base.rstrip("/"), key, source
+
+
+def serialize_conversation(row: Conversation) -> dict:
+    return {
+        "id": row.id,
+        "title": row.title,
+        "preview": row.preview or "",
+        "icon_key": row.icon_key,
+        "icon_color": row.icon_color,
+        "pinned": bool(row.pinned),
+        "unread": bool(row.unread),
+        "hidden": bool(row.hidden),
+        "group_name": row.group_name or "",
+        "provider": row.provider,
+        "model": row.model,
+        "permission_mode": row.permission_mode,
+        "workspace": row.workspace or "",
+        "summary": row.summary or "",
+        "updated_at": row.updated_at.isoformat(sep=" ", timespec="seconds") if row.updated_at else "",
+    }
+
+
+def serialize_attachment(row: Attachment) -> dict:
+    return {
+        "id": row.id,
+        "filename": row.filename,
+        "mime": row.mime,
+        "size": row.size,
+        "message_id": row.message_id,
+    }
+
+
+def present_messages(db, conversation_id: int) -> list[dict]:
+    rows = db.scalars(
+        select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id.asc())
+    ).all()
+    attachments = db.scalars(
+        select(Attachment).where(Attachment.conversation_id == conversation_id).order_by(Attachment.id.asc())
+    ).all()
+    by_message: dict[int, list] = {}
+    for item in attachments:
+        if item.message_id:
+            by_message.setdefault(item.message_id, []).append(serialize_attachment(item))
+    tool_rows = {row.tool_call_id: row for row in rows if row.role == "tool" and row.tool_call_id}
+    presented = []
+    for row in rows:
+        if row.role == "tool":
+            continue
+        item = {
+            "id": row.id,
+            "role": row.role,
+            "content": row.content or "",
+            "reasoning": row.reasoning or "",
+            "status": row.status,
+            "created_at": row.created_at.isoformat(sep=" ", timespec="seconds") if row.created_at else "",
+            "attachments": by_message.get(row.id, []),
+            "tools": [],
+        }
+        for call in row.tool_calls or []:
+            follow = tool_rows.get(call.get("id"))
+            raw = follow.content if follow else ""
+            shown, diff = split_embedded_diff(raw)
+            item["tools"].append(
+                {
+                    "id": call.get("id"),
+                    "name": call.get("name"),
+                    "arguments": call.get("arguments") or {},
+                    "result": shown,
+                    "diff": diff,
+                    "ok": follow.status != "error" if follow else True,
+                }
+            )
+        presented.append(item)
+    return presented
+
+
+def list_conversations(db, query: str = "") -> list[dict]:
+    statement = select(Conversation).order_by(
+        Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc()
+    )
+    if query:
+        like = f"%{query}%"
+        statement = statement.where(or_(Conversation.title.like(like), Conversation.preview.like(like)))
+    return [serialize_conversation(row) for row in db.scalars(statement.limit(200)).all()]
+
+
+def usage_summary(db) -> dict:
+    prompt, completion = db.execute(
+        select(func.coalesce(func.sum(UsageEvent.prompt_tokens), 0), func.coalesce(func.sum(UsageEvent.completion_tokens), 0))
+    ).one()
+    rows = db.execute(
+        select(UsageEvent.model, func.sum(UsageEvent.prompt_tokens), func.sum(UsageEvent.completion_tokens)).group_by(
+            UsageEvent.model
+        )
+    ).all()
+    by_model = []
+    total_cost = 0.0
+    for model, pin, pout in rows:
+        cost = estimate_cost(model or "", int(pin or 0), int(pout or 0))
+        total_cost += cost
+        by_model.append(
+            {
+                "model": model,
+                "prompt_tokens": int(pin or 0),
+                "completion_tokens": int(pout or 0),
+                "cost_usd": cost,
+            }
+        )
+    return {
+        "prompt_tokens": int(prompt or 0),
+        "completion_tokens": int(completion or 0),
+        "cost_usd": round(total_cost, 8),
+        "by_model": by_model,
+        "note": "费用是按公开价格估算的，本地 Ollama 计为 0。",
+    }
+
+
+async def doctor(db) -> dict:
+    checks = []
+    try:
+        db.execute(text("SELECT 1"))
+        checks.append({"name": "mysql", "ok": True, "detail": "已连接"})
+    except Exception as exc:
+        checks.append({"name": "mysql", "ok": False, "detail": str(exc)})
+    _base, has_key_value, _source = deepseek_credentials(db)
+    checks.append({"name": "deepseek_key", "ok": bool(has_key_value), "detail": "已配置" if has_key_value else "未配置"})
+    base = all_settings(db).get("ollama_base") or get_settings().ollama_base_url
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(base.rstrip("/") + "/api/tags")
+            response.raise_for_status()
+            names = [item.get("name", "") for item in response.json().get("models", [])]
+        checks.append({"name": "ollama", "ok": True, "detail": "、".join(names) or "服务在线，但没有模型"})
+    except Exception as exc:
+        checks.append({"name": "ollama", "ok": False, "detail": str(exc)})
+    workspace = Path(all_settings(db)["workspace"])
+    checks.append(
+        {
+            "name": "workspace",
+            "ok": workspace.exists() and os.access(workspace, os.W_OK),
+            "detail": str(workspace),
+        }
+    )
+    dist = ROOT_DIR / "frontend" / "dist" / "index.html"
+    checks.append({"name": "frontend", "ok": dist.exists(), "detail": "已构建" if dist.exists() else "尚未构建"})
+    checks.append({"name": "python", "ok": True, "detail": platform.python_version()})
+    required = {"mysql", "workspace"}
+    ready = all(item["ok"] for item in checks if item["name"] in required) and any(
+        item["ok"] for item in checks if item["name"] in {"deepseek_key", "ollama"}
+    )
+    return {"ok": ready, "checks": checks}
+
+
+async def compact_conversation(db, conversation, provider_hub) -> str:
+    rows = db.scalars(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation.id,
+            Message.in_context.is_(True),
+            Message.role != "divider",
+        )
+        .order_by(Message.id.asc())
+    ).all()
+    if len(rows) < 5:
+        return "对话还比较短，先不压缩。"
+    keep = 4
+    while keep < len(rows) and rows[-keep].role == "tool":
+        keep += 1
+    if keep >= len(rows):
+        return "剩下的都是一组工具调用，先不压缩。"
+    old = rows[:-keep]
+    from ..agent.memory import clip_transcript, compact_source, summarize_history, transcript_text
+
+    transcript = clip_transcript([(row.role, transcript_text(row.role, row.content, row.tool_calls)) for row in old])
+    workspace = Path(conversation.workspace) if conversation.workspace else Path(all_settings(db)["workspace"])
+    material = compact_source(workspace, conversation.id, conversation.summary or "", transcript)
+    provider = provider_hub.resolve(conversation.provider, db)
+    fallback_model = (all_settings(db).get("fallback_model") or "").strip()
+    summary = await summarize_history(provider, conversation.model, material, fallback_model)
+    conversation.summary = summary
+    for row in old:
+        row.in_context = False
+    db.commit()
+    return summary
+
+
+async def handle_slash(db, conversation, content: str, provider_hub) -> str | None:
+    text = (content or "").strip()
+    if not text.startswith("/"):
+        return None
+    head, _, rest = text.partition(" ")
+    command = head.lower()
+    rest = rest.strip()
+    if command == "/help":
+        return (
+            "可用命令：/help、/doctor、/cost、/memory 内容、/tasks、/agents、/jobs、/permissions、/rewind、"
+            "/mode auto|ask|plan|edits、/model deepseek deepseek-chat、/model ollama qwen3:4b、"
+            "/compact、/skill 名称"
+        )
+    if command == "/doctor":
+        report = await doctor(db)
+        lines = ["环境检查 " + ("通过" if report["ok"] else "有未就绪项")]
+        for item in report["checks"]:
+            mark = "通过" if item["ok"] else "未通过"
+            lines.append(f"- {item['name']}：{mark}，{item['detail']}")
+        return "\n".join(lines)
+    if command == "/cost":
+        summary = usage_summary(db)
+        return (
+            f"累计输入 {summary['prompt_tokens']} token，输出 {summary['completion_tokens']} token，"
+            f"估算费用 ${summary['cost_usd']}。{summary['note']}"
+        )
+    if command == "/memory":
+        from ..agent.memory import save_memory, sync_index
+
+        workspace = Path(conversation.workspace or all_settings(db)["workspace"])
+        if not rest:
+            listed = sync_index(workspace).strip()
+            return listed or "还没有记忆。用法：/memory 要记住的内容"
+        save_memory(workspace, rest[:40], rest, "user", rest[:80])
+        return "已记住。"
+    if command == "/tasks":
+        rows = db.scalars(select(Task).where(Task.conversation_id == conversation.id).order_by(Task.id.asc())).all()
+        if not rows:
+            return "这个会话还没有任务。"
+        return "\n".join(f"#{row.id} [{row.status}] {row.title}" for row in rows)
+    if command == "/agents":
+        from ..agent.agents import catalog
+
+        workspace = Path(conversation.workspace) if conversation.workspace else None
+        return catalog(workspace)
+    if command == "/permissions":
+        from ..agent.permissions import add_local_rule, clear_local_rules, describe_rules
+
+        workspace = Path(conversation.workspace or all_settings(db)["workspace"])
+        piece, _, rule = rest.partition(" ")
+        action = piece.strip().lower()
+        if not action:
+            return describe_rules(workspace)
+        if action == "clear":
+            return clear_local_rules(workspace)
+        if action in {"deny", "ask", "allow"}:
+            return add_local_rule(workspace, action, rule.strip())
+        return "用法：/permissions、/permissions deny bash(Remove-Item*)、/permissions clear"
+    if command == "/rewind":
+        from ..agent.history import rewind
+
+        count = int(rest) if rest.isdigit() else 1
+        workspace = Path(conversation.workspace or all_settings(db)["workspace"])
+        restored = rewind(workspace, conversation.id, count)
+        if not restored:
+            return "没有可撤销的文件改动。"
+        return "已撤销这些文件改动：\n" + "\n".join(restored)
+    if command == "/jobs":
+        from ..agent.state import JOBS
+
+        if not JOBS:
+            return "没有后台命令。"
+        lines = []
+        for job_id, job in JOBS.items():
+            state = "已结束" if job.get("done") else "运行中"
+            lines.append(f"#{job_id} [{state}] {job.get('command')}")
+        return "\n".join(lines)
+    if command == "/mode":
+        mode = canonical_mode(rest or "auto")
+        if mode not in PERMISSION_MODES:
+            return "模式只能是 auto、ask、plan、edits 或 dontAsk。"
+        conversation.permission_mode = mode
+        db.commit()
+        return f"当前会话权限已改为 {mode}。"
+    if command == "/model":
+        pieces = rest.split()
+        if len(pieces) < 2 or pieces[0] not in {"deepseek", "ollama"}:
+            return "用法：/model deepseek deepseek-chat 或 /model ollama qwen3:4b"
+        conversation.provider = pieces[0]
+        conversation.model = pieces[1]
+        db.commit()
+        return f"已切换到 {conversation.provider} / {conversation.model}。"
+    if command == "/compact":
+        summary = await compact_conversation(db, conversation, provider_hub)
+        return "上下文已压缩。\n" + summary
+    if command == "/skill":
+        from ..agent.tools import load_skills
+
+        workspace = Path(conversation.workspace) if conversation.workspace else None
+        skills = {item["name"]: item for item in load_skills(db, workspace)}
+        if not rest:
+            return "可用技能：" + "、".join(skills) if skills else "没有技能"
+        skill = skills.get(rest)
+        if skill is None:
+            return "没有这个技能。可用：" + "、".join(skills)
+        return f"已载入技能 {rest}。\n{skill['body']}"
+    return "不认识这个命令。输入 /help 查看。"
+
+
+async def scheduler_loop() -> None:
+    import asyncio
+
+    while True:
+        await asyncio.sleep(15)
+        try:
+            await run_due_schedules()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("scheduler tick failed")
+
+
+async def run_due_schedules() -> int:
+    from ..agent.loop import run_turn
+    from ..agent.providers import hub
+    from ..db import open_session
+
+    db = open_session()
+    started = 0
+    try:
+        now = datetime.now()
+        rows = db.scalars(
+            select(Schedule).where(
+                Schedule.enabled.is_(True),
+                Schedule.next_run.is_not(None),
+                Schedule.next_run <= now,
+            )
+        ).all()
+        jobs = []
+        for row in rows:
+            row.last_run = now
+            if row.every_seconds and row.every_seconds > 0:
+                row.next_run = now + timedelta(seconds=max(int(row.every_seconds), 30))
+            else:
+                row.enabled = False
+            jobs.append((row.conversation_id, row.prompt))
+        db.commit()
+        for conversation_id, prompt in jobs:
+            if not conversation_id:
+                continue
+            conversation = db.get(Conversation, conversation_id)
+            if conversation is None:
+                continue
+
+            async def ignore(_event):
+                return None
+
+            from ..agent.loop import turn_tokens
+
+            token = f"schedule-{conversation_id}-{int(now.timestamp())}-{started}"
+            turn_tokens[conversation.id] = token
+            await run_turn(db, conversation, prompt, [], ignore, token)
+            started += 1
+        return started
+    finally:
+        db.close()
+
+
+def startup() -> None:
+    from ..db import init_db, session_scope
+
+    init_db()
+    with session_scope() as db:
+        ensure_defaults(db)
+        if get_settings().auto_seed:
+            seed_if_empty(db)
+
+
+def public_settings(db) -> dict:
+    stored = all_settings(db)
+    user = db.get(User, 1)
+    _base, key, source = deepseek_credentials(db)
+    visible = {name: value for name, value in stored.items() if name not in SECRET_KEYS}
+    return {
+        "values": visible,
+        "user": {"name": user.name if user else stored.get("user_name", "用户")},
+        "deepseek_configured": bool(key),
+        "deepseek_key_source": source,
+        "providers": ["deepseek", "ollama"],
+    }
+
+
+def delete_conversation(db, conversation: Conversation) -> None:
+    conversation_id = conversation.id
+    db.query(Attachment).filter(Attachment.conversation_id == conversation_id).delete()
+    db.query(Message).filter(Message.conversation_id == conversation_id).delete()
+    db.query(Task).filter(Task.conversation_id == conversation_id).delete()
+    db.query(Schedule).filter(Schedule.conversation_id == conversation_id).delete()
+    db.delete(conversation)
+    db.commit()

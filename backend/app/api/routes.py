@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..agent.group_run import iter_group_events
+from ..agent.intake import answer_intake, close_intake, start_intake
 from ..agent.loop import cancel_turn, iter_events
 from ..agent.providers import OpenAICompatProvider, collect_text, hub
 from ..agent.tools import broker, load_skills
@@ -16,10 +18,12 @@ from ..models import Attachment, Conversation, McpServer, Message, Skill, Task
 from ..services.runtime import (
     all_settings,
     compact_conversation,
+    create_group,
     delete_conversation,
     doctor,
     list_conversations,
     present_messages,
+    private_threads,
     deepseek_credentials,
     public_settings,
     serialize_attachment,
@@ -64,11 +68,30 @@ class ConversationPatch(BaseModel):
     group_name: str | None = None
 
 
+class GroupMemberIn(BaseModel):
+    name: str
+    duty: str = ""
+    icon_key: str | None = None
+    icon_color: str | None = None
+
+
+class GroupIn(BaseModel):
+    title: str = ""
+    members: list[GroupMemberIn] = Field(default_factory=list)
+    conversation_ids: list[int] = Field(default_factory=list)
+
+
 class ChatIn(BaseModel):
     content: str = ""
     attachment_ids: list[int] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
+
+
+class IntakeAnswerIn(BaseModel):
+    message_id: int
+    choice: str = ""
+    text: str = ""
 
 
 class ApprovalIn(BaseModel):
@@ -173,6 +196,15 @@ def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
     return serialize_conversation(row)
 
 
+@router.post("/groups")
+def create_group_chat(body: GroupIn, db: Session = Depends(get_db)):
+    try:
+        row = create_group(db, body.title, [item.model_dump() for item in body.members], body.conversation_ids)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return serialize_conversation(row)
+
+
 @router.patch("/conversations/{conversation_id}")
 def patch_conversation(conversation_id: int, body: ConversationPatch, db: Session = Depends(get_db)):
     row = db.get(Conversation, conversation_id)
@@ -205,9 +237,32 @@ def remove_conversation(conversation_id: int, db: Session = Depends(get_db)):
 
 @router.get("/conversations/{conversation_id}/messages")
 def messages(conversation_id: int, db: Session = Depends(get_db)):
-    if db.get(Conversation, conversation_id) is None:
+    row = db.get(Conversation, conversation_id)
+    if row is None:
         raise HTTPException(404, "会话不存在")
-    return {"items": present_messages(db, conversation_id)}
+    return {"items": present_messages(db, conversation_id), "private_threads": private_threads(db, row)}
+
+
+@router.post("/conversations/{conversation_id}/intake")
+async def begin_intake(conversation_id: int, db: Session = Depends(get_db)):
+    row = db.get(Conversation, conversation_id)
+    if row is None:
+        raise HTTPException(404, "会话不存在")
+    try:
+        return await start_intake(db, row)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/conversations/{conversation_id}/intake/answer")
+async def reply_intake(conversation_id: int, body: IntakeAnswerIn, db: Session = Depends(get_db)):
+    row = db.get(Conversation, conversation_id)
+    if row is None:
+        raise HTTPException(404, "会话不存在")
+    try:
+        return await answer_intake(db, row, body.message_id, body.choice, body.text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/conversations/{conversation_id}/chat")
@@ -222,11 +277,18 @@ async def chat(conversation_id: int, body: ChatIn):
         conversation.provider = body.provider
     if body.model:
         conversation.model = body.model
+    if (conversation.kind or "chat") == "chat":
+        close_intake(db, conversation)
     db.commit()
 
     async def generate():
         try:
-            async for event in iter_events(db, conversation, body.content, body.attachment_ids):
+            stream = (
+                iter_group_events(db, conversation, body.content)
+                if (conversation.kind or "") == "group"
+                else iter_events(db, conversation, body.content, body.attachment_ids)
+            )
+            async for event in stream:
                 yield sse(event)
         finally:
             db.close()

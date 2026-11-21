@@ -36,8 +36,10 @@ export const useChatStore = defineStore("chat", {
     conversations: [],
     activeId: null,
     messages: [],
+    privateThreads: [],
     draft: "",
     streaming: false,
+    intakeBusy: false,
     userName: "用户",
     settings: {},
     deepseekConfigured: false,
@@ -143,7 +145,10 @@ export const useChatStore = defineStore("chat", {
       if (current?.unread) this.patchConversation(id, { unread: false });
       const token = ++loadToken;
       const data = await api(`/api/conversations/${id}/messages`);
-      if (token === loadToken) this.messages = data.items;
+      if (token === loadToken) {
+        this.messages = data.items;
+        this.privateThreads = data.private_threads || [];
+      }
     },
     async createConversation(extra = {}) {
       const data = await api("/api/conversations", {
@@ -156,9 +161,56 @@ export const useChatStore = defineStore("chat", {
       });
       await this.refreshConversations();
       this.messages = [];
+      this.privateThreads = [];
       this.activeId = data.id;
       this.searchOpen = false;
       this.botOpen = false;
+      if (extra.greet !== false) await this.startIntake(data.id);
+      return data;
+    },
+    async startIntake(id) {
+      this.intakeBusy = true;
+      try {
+        const data = await api(`/api/conversations/${id}/intake`, { method: "POST", body: "{}" });
+        if (this.activeId === id) this.messages = data.items || [];
+        await this.refreshConversations();
+      } catch (error) {
+        this.notify(error.message || "开场没有生成");
+      } finally {
+        if (this.activeId === id) this.intakeBusy = false;
+      }
+    },
+    async answerIntake(messageId, choice) {
+      const id = this.activeId;
+      if (!id || this.intakeBusy) return;
+      this.intakeBusy = true;
+      try {
+        const data = await api(`/api/conversations/${id}/intake/answer`, {
+          method: "POST",
+          body: JSON.stringify({ message_id: messageId, choice }),
+        });
+        if (this.activeId === id) this.messages = data.items || [];
+        await this.refreshConversations();
+      } catch (error) {
+        this.notify(error.message || "没能记下这个选择");
+      } finally {
+        if (this.activeId === id) this.intakeBusy = false;
+      }
+    },
+    async createGroup(body) {
+      try {
+        const data = await api("/api/groups", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        await this.refreshConversations();
+        this.botOpen = false;
+        await this.select(data.id);
+        return data;
+      } catch (error) {
+        this.notify(error.message || "创建群聊失败");
+        return null;
+      }
     },
     async patchConversation(id, body) {
       const data = await api(`/api/conversations/${id}`, {
@@ -183,6 +235,7 @@ export const useChatStore = defineStore("chat", {
       if (this.activeId === id) {
         this.activeId = this.conversations[0]?.id || null;
         this.messages = [];
+        this.privateThreads = [];
         if (this.activeId) await this.select(this.activeId);
       }
     },
@@ -217,7 +270,7 @@ export const useChatStore = defineStore("chat", {
       return data;
     },
     async upload(file) {
-      if (!this.activeId) await this.createConversation();
+      if (!this.activeId) await this.createConversation({ greet: false });
       const form = new FormData();
       form.append("file", file);
       const response = await fetch(`/api/conversations/${this.activeId}/attachments`, { method: "POST", body: form });
@@ -228,14 +281,14 @@ export const useChatStore = defineStore("chat", {
     async send() {
       const content = this.draft.trim();
       if ((!content && !this.pending.length) || this.streaming) return;
-      if (!this.activeId) await this.createConversation();
+      if (!this.activeId) await this.createConversation({ greet: false });
       const conversation = this.active;
       const attachmentIds = this.pending.map((item) => item.id);
       const localAttachments = [...this.pending];
       this.draft = "";
       this.pending = [];
       this.streaming = true;
-      const assistant = {
+      let assistant = {
         id: `local-${Date.now()}`,
         role: "assistant",
         content: "",
@@ -272,7 +325,33 @@ export const useChatStore = defineStore("chat", {
             provider: conversation?.provider,
             model: conversation?.model,
           },
-          (event) => this.applyEvent(assistant, event),
+          (event) => {
+            if (event.type === "speaker") {
+              const named = event.name || "";
+              if (assistant.speaker || assistant.content || (assistant.tools || []).length) {
+                assistant.status = "done";
+                assistant = {
+                  id: `local-${Date.now()}-${named}`,
+                  role: "assistant",
+                  speaker: named,
+                  content: "",
+                  reasoning: "",
+                  tools: [],
+                  attachments: [],
+                  status: "streaming",
+                  approval: null,
+                  startedAt: Date.now(),
+                  segments: [],
+                  segment: { id: "", content: "", reasoning: "", tools: [], attachments: [] },
+                };
+                this.messages.push(assistant);
+              } else {
+                assistant.speaker = named;
+              }
+              return;
+            }
+            this.applyEvent(assistant, event);
+          },
           controller.signal,
         );
         if (assistant.status === "error") {

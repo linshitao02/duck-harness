@@ -14,3 +14,6 @@ desktop/node_modules/
 .harness/
 clawd-code/
 deepseek-harness-master/
+autogen/
+问题解答/
+~$*

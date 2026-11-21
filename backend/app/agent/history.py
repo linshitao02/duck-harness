@@ -115,3 +115,85 @@ def rewind(workspace: Path, conversation_id: int | None, batches: int = 1) -> li
                 restored.append(_restore(record))
             handle.write(json.dumps({"revert": batch}, ensure_ascii=False) + "\n")
     return restored
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _cited_blobs(journal: Path, blob_root: Path) -> list[Path]:
+    cited = []
+    if not journal.is_file():
+        return cited
+    try:
+        lines = journal.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return cited
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        raw = str(item.get("blob") or "")
+        if not raw:
+            continue
+        blob = Path(raw)
+        if blob.is_file() and not blob.is_symlink() and _inside(blob, blob_root):
+            cited.append(blob)
+    return cited
+
+
+def discard_journal(workspace: Path, conversation_id: int) -> bool:
+    """删掉这条会话的撤销记录，以及没有其他会话还在引用的副本。"""
+    root = workspace / ".harness" / "history"
+    journal = root / f"{int(conversation_id)}.jsonl"
+    if not journal.is_file() or journal.is_symlink() or not _inside(journal, root):
+        return False
+    blob_root = root / "blobs"
+    cited = _cited_blobs(journal, blob_root)
+    kept = set()
+    for other in root.glob("*.jsonl"):
+        if other.name == journal.name:
+            continue
+        for blob in _cited_blobs(other, blob_root):
+            kept.add(blob.resolve())
+    journal.unlink()
+    for blob in cited:
+        if blob.resolve() in kept or not blob.is_file():
+            continue
+        blob.unlink()
+    return True
+
+
+def sweep_history(workspace: Path, live_ids: set[int]) -> int:
+    """清掉工作区里已经没有对应会话的撤销记录，以及没人引用的副本。"""
+    root = workspace / ".harness" / "history"
+    if not root.is_dir() or root.is_symlink():
+        return 0
+    removed = 0
+    for journal in list(root.glob("*.jsonl")):
+        if not journal.stem.isdigit():
+            continue
+        conversation_id = int(journal.stem)
+        if conversation_id in live_ids:
+            continue
+        if discard_journal(workspace, conversation_id):
+            removed += 1
+    blob_root = root / "blobs"
+    if blob_root.is_dir() and not blob_root.is_symlink():
+        cited = set()
+        for journal in root.glob("*.jsonl"):
+            for blob in _cited_blobs(journal, blob_root):
+                cited.add(blob.resolve())
+        for blob in blob_root.iterdir():
+            if not blob.is_file() or blob.is_symlink() or blob.resolve() in cited:
+                continue
+            if _inside(blob, blob_root):
+                blob.unlink()
+    return removed

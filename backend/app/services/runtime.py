@@ -1,13 +1,15 @@
 import logging
 import os
 import platform
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
 from sqlalchemy import func, or_, select, text
 
-from ..config import ROOT_DIR, get_settings
+from ..config import ROOT_DIR, UPLOAD_DIR, get_settings
+from ..agent.history import discard_journal, sweep_history
 from ..agent.diffutil import split_embedded_diff
 from ..models import (
     Attachment,
@@ -232,6 +234,9 @@ def serialize_conversation(row: Conversation) -> dict:
         "permission_mode": row.permission_mode,
         "workspace": row.workspace or "",
         "summary": row.summary or "",
+        "kind": row.kind or "chat",
+        "room_id": row.room_id,
+        "member_name": row.member_name or "",
         "updated_at": row.updated_at.isoformat(sep=" ", timespec="seconds") if row.updated_at else "",
     }
 
@@ -260,12 +265,15 @@ def present_messages(db, conversation_id: int) -> list[dict]:
     tool_rows = {row.tool_call_id: row for row in rows if row.role == "tool" and row.tool_call_id}
     presented = []
     for row in rows:
-        if row.role == "tool":
+        if row.role == "tool" or (row.channel or "public") in {"private", "intake"}:
             continue
         item = {
             "id": row.id,
             "role": row.role,
             "content": row.content or "",
+            "speaker": row.speaker or "",
+            "handoff_target": row.handoff_target or "",
+            "card": row.card if isinstance(row.card, dict) else None,
             "reasoning": row.reasoning or "",
             "status": row.status,
             "created_at": row.created_at.isoformat(sep=" ", timespec="seconds") if row.created_at else "",
@@ -574,6 +582,7 @@ def startup() -> None:
     init_db()
     with session_scope() as db:
         ensure_defaults(db)
+        sweep_orphaned_conversation_files(db)
         if get_settings().auto_seed:
             seed_if_empty(db)
 
@@ -592,11 +601,334 @@ def public_settings(db) -> dict:
     }
 
 
+def room_members(db, group: Conversation) -> list[Conversation]:
+    """按拉进群时的顺序返回成员。没记顺序时按创建顺序。"""
+    rows = db.scalars(select(Conversation).where(Conversation.room_id == group.id)).all()
+    by_id = {row.id: row for row in rows}
+    ordered = []
+    for item in (group.room_state or {}).get("member_ids") or []:
+        try:
+            key = int(item)
+        except (TypeError, ValueError):
+            continue
+        row = by_id.pop(key, None)
+        if row is not None:
+            ordered.append(row)
+    ordered.extend(sorted(by_id.values(), key=lambda row: row.id))
+    return ordered
+
+
+def _linked_prompt(name: str) -> str:
+    return f"你是{name}。在群里按这个身份完成交给你的任务。"
+
+
+def _inside_dir(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def discard_uploads(conversation_id: int) -> bool:
+    """删掉这条会话上传和生成的附件目录。"""
+    root = UPLOAD_DIR.resolve()
+    folder = root / str(int(conversation_id))
+    if not folder.is_dir() or folder.is_symlink() or not _inside_dir(folder, root):
+        return False
+    shutil.rmtree(folder)
+    return True
+
+
+def _known_workspaces(db) -> list[Path]:
+    found = []
+    seen = set()
+    setting = db.get(Setting, "workspace")
+    raw_values = [setting.value if setting else ""]
+    raw_values.extend(db.scalars(select(Conversation.workspace)))
+    for raw in raw_values:
+        if not raw or not _is_dir(raw):
+            continue
+        try:
+            resolved = str(Path(raw).resolve())
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        found.append(Path(resolved))
+    return found
+
+
+def _sweep_loose_uploads(db, live: set[int]) -> int:
+    """删掉还在的会话目录里、已经没有附件记录的文件。"""
+    referenced = set()
+    for row in db.scalars(select(Attachment)):
+        if not row.path:
+            continue
+        try:
+            referenced.add(str(Path(row.path).resolve()))
+        except OSError:
+            continue
+    removed = 0
+    root = UPLOAD_DIR.resolve()
+    for conversation_id in live:
+        folder = root / str(int(conversation_id))
+        if not folder.is_dir() or folder.is_symlink() or not _inside_dir(folder, root):
+            continue
+        for child in list(folder.iterdir()):
+            if not child.is_file() or child.is_symlink() or not _inside_dir(child, folder):
+                continue
+            try:
+                if str(child.resolve()) in referenced:
+                    continue
+                child.unlink()
+                removed += 1
+            except OSError:
+                logger.warning("清理落单附件失败：%s", child.name, exc_info=True)
+        try:
+            if folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
+        except OSError:
+            pass
+    return removed
+
+
+def sweep_orphaned_conversation_files(db) -> None:
+    """清掉已经没有会话的上传目录和撤销副本。"""
+    live = set(db.scalars(select(Conversation.id)))
+    removed_uploads = 0
+    if UPLOAD_DIR.is_dir() and not UPLOAD_DIR.is_symlink():
+        for child in list(UPLOAD_DIR.iterdir()):
+            if not child.is_dir() or child.is_symlink() or not child.name.isdigit():
+                continue
+            if int(child.name) in live:
+                continue
+            try:
+                if discard_uploads(int(child.name)):
+                    removed_uploads += 1
+            except OSError:
+                logger.warning("清理上传目录失败：%s", child.name, exc_info=True)
+    removed_loose = 0
+    try:
+        removed_loose = _sweep_loose_uploads(db, live)
+    except OSError:
+        logger.warning("清理落单附件失败", exc_info=True)
+    removed_journals = 0
+    for workspace in _known_workspaces(db):
+        try:
+            removed_journals += sweep_history(workspace, live)
+        except OSError:
+            logger.warning("清理撤销副本失败：%s", workspace, exc_info=True)
+    if removed_uploads or removed_loose or removed_journals:
+        logger.info(
+            "已清理遗留会话文件：上传目录 %s 个，落单附件 %s 个，撤销记录 %s 份",
+            removed_uploads,
+            removed_loose,
+            removed_journals,
+        )
+
+
+def _discard_files(conversation_id: int, workspace: str | None) -> None:
+    try:
+        discard_uploads(conversation_id)
+    except OSError:
+        logger.warning("清理会话上传文件失败：%s", conversation_id, exc_info=True)
+    if not workspace:
+        return
+    try:
+        discard_journal(Path(workspace), conversation_id)
+    except OSError:
+        logger.warning("清理会话撤销副本失败：%s", conversation_id, exc_info=True)
+
+
 def delete_conversation(db, conversation: Conversation) -> None:
-    conversation_id = conversation.id
-    db.query(Attachment).filter(Attachment.conversation_id == conversation_id).delete()
-    db.query(Message).filter(Message.conversation_id == conversation_id).delete()
-    db.query(Task).filter(Task.conversation_id == conversation_id).delete()
-    db.query(Schedule).filter(Schedule.conversation_id == conversation_id).delete()
-    db.delete(conversation)
+    rows = [conversation]
+    release = []
+    if (conversation.kind or "") == "group":
+        for row in db.scalars(select(Conversation).where(Conversation.room_id == conversation.id)).all():
+            if (row.kind or "chat") == "member":
+                rows.append(row)
+            else:
+                release.append(row)
+    removed = [(row.id, row.workspace) for row in rows]
+    for row in rows:
+        conversation_id = row.id
+        db.query(Attachment).filter(Attachment.conversation_id == conversation_id).delete()
+        db.query(Message).filter(Message.conversation_id == conversation_id).delete()
+        db.query(Task).filter(Task.conversation_id == conversation_id).delete()
+        db.query(Schedule).filter(Schedule.conversation_id == conversation_id).delete()
+        db.delete(row)
+    for row in release:
+        name = row.member_name or ""
+        row.room_id = None
+        row.member_name = ""
+        if (row.member_prompt or "") == _linked_prompt(name):
+            row.member_prompt = ""
     db.commit()
+    for conversation_id, workspace in removed:
+        _discard_files(conversation_id, workspace)
+
+
+_MEMBER_COLORS = ["#8d5a3c", "#e23b3b", "#f08a24", "#3b82f6", "#7c4dff", "#3cbe5a"]
+_MEMBER_ICONS = ["blob", "squircle", "diamond", "circle", "star", "drop"]
+
+
+def _link_existing_group(db, title: str, conversation_ids: list[int]) -> Conversation:
+    chosen = []
+    seen = set()
+    for raw in conversation_ids:
+        try:
+            key = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("有会话不存在") from None
+        if key in seen:
+            raise ValueError("同一个会话不能加两次")
+        seen.add(key)
+        row = db.get(Conversation, key)
+        if row is None:
+            raise ValueError("有会话不存在")
+        if (row.kind or "") == "group" or row.room_id or (row.kind or "") == "member":
+            raise ValueError(f"{row.title or '这个会话'} 已经在群里")
+        name = (row.title or "").strip()[:64]
+        if not name or name in {"user", "用户"}:
+            raise ValueError("会话名字不能作为群成员")
+        chosen.append((row, name))
+    if len(chosen) < 2:
+        raise ValueError("群聊至少要拉进两个已有会话")
+    names = [name for _row, name in chosen]
+    if len(set(names)) != len(names):
+        raise ValueError("这些会话的名字有重复，群里靠名字交接")
+    stored = all_settings(db)
+    group_title = (title or "").strip() or "、".join(names)
+    group = Conversation(
+        title=group_title[:255],
+        preview="",
+        provider=stored["provider"],
+        model=stored["deepseek_model"] if stored["provider"] == "deepseek" else stored["ollama_model"],
+        permission_mode=stored["permission_mode"],
+        workspace=stored["workspace"],
+        icon_key="burst",
+        icon_color="#1c1c1e",
+        kind="group",
+        room_state={
+            "current_speaker": names[0],
+            "current_turn": 0,
+            "max_turns": 6,
+            "member_ids": [row.id for row, _name in chosen],
+        },
+    )
+    db.add(group)
+    db.flush()
+    for row, name in chosen:
+        row.room_id = group.id
+        row.member_name = name
+        if not (row.member_prompt or "").strip():
+            row.member_prompt = _linked_prompt(name)
+    group.updated_at = datetime.now() + timedelta(seconds=2)
+    db.commit()
+    return group
+
+
+def create_group(db, title: str, members: list[dict] | None = None, conversation_ids: list[int] | None = None) -> Conversation:
+    if conversation_ids:
+        return _link_existing_group(db, title, conversation_ids)
+    members = members or []
+    cleaned = []
+    for item in members:
+        name = str(item.get("name") or "").strip()
+        duty = str(item.get("duty") or "").strip()
+        if not name:
+            continue
+        cleaned.append({"name": name[:64], "duty": duty[:500], "icon_key": item.get("icon_key"), "icon_color": item.get("icon_color")})
+    if len(cleaned) < 2:
+        raise ValueError("群聊至少要有两个成员")
+    names = [item["name"] for item in cleaned]
+    if len(set(names)) != len(names):
+        raise ValueError("成员名字不能重复")
+    if any(name in {"user", "用户"} for name in names):
+        raise ValueError("成员不能叫 user")
+    stored = all_settings(db)
+    group_title = (title or "").strip() or "、".join(names)
+    group = Conversation(
+        title=group_title[:255],
+        preview="",
+        provider=stored["provider"],
+        model=stored["deepseek_model"] if stored["provider"] == "deepseek" else stored["ollama_model"],
+        permission_mode=stored["permission_mode"],
+        workspace=stored["workspace"],
+        icon_key="burst",
+        icon_color="#1c1c1e",
+        kind="group",
+        room_state={"current_speaker": names[0], "current_turn": 0, "max_turns": 6, "member_ids": []},
+    )
+    db.add(group)
+    db.flush()
+    for index, item in enumerate(cleaned):
+        prompt = f"你是{item['name']}。职责：{item['duty'] or '按自己的角色完成交办的任务。'}"
+        member = Conversation(
+            title=item["name"][:255],
+            preview="你好，我已就位。",
+            provider=group.provider,
+            model=group.model,
+            permission_mode=group.permission_mode,
+            workspace=group.workspace,
+            icon_key=(item["icon_key"] or _MEMBER_ICONS[index % len(_MEMBER_ICONS)])[:32],
+            icon_color=(item["icon_color"] or _MEMBER_COLORS[index % len(_MEMBER_COLORS)])[:16],
+            kind="member",
+            room_id=group.id,
+            member_name=item["name"],
+            member_prompt=prompt,
+        )
+        db.add(member)
+        db.flush()
+        db.add(
+            Message(
+                conversation_id=member.id,
+                role="assistant",
+                content="你好，我已就位。等你或协调者给出具体安排。",
+                speaker=item["name"],
+                status="done",
+            )
+        )
+        state = dict(group.room_state or {})
+        ids = list(state.get("member_ids") or [])
+        ids.append(member.id)
+        state["member_ids"] = ids
+        group.room_state = state
+    group.updated_at = datetime.now() + timedelta(seconds=2)
+    db.commit()
+    return group
+
+
+def private_threads(db, conversation: Conversation) -> list[dict]:
+    if not conversation.room_id or not conversation.member_name or (conversation.kind or "") == "group":
+        return []
+    rows = db.scalars(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation.room_id,
+            Message.channel == "private",
+            or_(Message.speaker == conversation.member_name, Message.counterpart == conversation.member_name),
+        )
+        .order_by(Message.id.asc())
+    ).all()
+    buckets: dict[str, list] = {}
+    order: list[str] = []
+    for row in rows:
+        other = row.counterpart if row.speaker == conversation.member_name else row.speaker
+        if not other:
+            continue
+        if other not in buckets:
+            buckets[other] = []
+            order.append(other)
+        buckets[other].append(
+            {
+                "id": row.id,
+                "speaker": row.speaker or "",
+                "counterpart": row.counterpart or "",
+                "content": row.content or "",
+                "created_at": row.created_at.isoformat(sep=" ", timespec="seconds") if row.created_at else "",
+            }
+        )
+    return [{"counterpart": name, "count": len(buckets[name]), "messages": buckets[name]} for name in order]

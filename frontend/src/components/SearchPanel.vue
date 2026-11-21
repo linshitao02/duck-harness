@@ -19,7 +19,7 @@
         class="search-hit"
         @click="open(item)"
       >
-        <span class="badge" :style="{ background: item.icon_color }">
+        <span class="badge" :style="badgeStyle(item.icon_key, item.icon_color)">
           <Badge :name="item.icon_key" />
         </span>
         <span class="conv-copy">
@@ -35,6 +35,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useChatStore } from "../store";
+import { badgeStyle } from "../shapes";
 import Badge from "./Badge.vue";
 
 const chat = useChatStore();

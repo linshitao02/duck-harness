@@ -2,7 +2,7 @@
   <aside class="sidebar">
     <div class="side-tools pywebview-drag-region">
       <span class="brand-mark" aria-hidden="true">
-        <img src="/duck.png" alt="" />
+        <img src="/duck.png?v=2" alt="" />
       </span>
       <span class="product-title">Duck Harness</span>
       <div class="side-actions">
@@ -29,7 +29,7 @@
           @click="chat.select(item.id)"
           @contextmenu.prevent.stop="openMenu($event, item)"
         >
-          <span class="badge" :style="{ background: item.icon_color }">
+          <span class="badge" :style="badgeStyle(item.icon_key, item.icon_color)">
             <Badge :name="item.icon_key" />
             <i v-if="item.unread" class="unread-dot" />
           </span>
@@ -95,6 +95,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useChatStore } from "../store";
+import { badgeStyle } from "../shapes";
 import Badge from "./Badge.vue";
 
 const chat = useChatStore();

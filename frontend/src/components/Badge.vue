@@ -1,5 +1,6 @@
 <template>
-  <svg v-if="shape" viewBox="0 0 64 64" class="badge-shape">
+  <DuckIcon v-if="duck" :name="name" />
+  <svg v-else-if="shape" viewBox="0 0 64 64" class="badge-shape">
     <path :d="shape.d" />
   </svg>
   <svg v-else viewBox="0 0 24 24" class="badge-icon">
@@ -19,8 +20,10 @@
 
 <script setup>
 import { computed } from "vue";
-import { shapeById } from "../shapes";
+import DuckIcon from "./DuckIcon.vue";
+import { isDuck, shapeById } from "../shapes";
 
 const props = defineProps({ name: { type: String, default: "spark" } });
-const shape = computed(() => shapeById(props.name));
+const duck = computed(() => isDuck(props.name));
+const shape = computed(() => (duck.value ? null : shapeById(props.name)));
 </script>

@@ -1,4 +1,25 @@
-export const BOT_SHAPES = [
+export const DUCKS = [
+  { id: "chick", label: "小鸭" },
+  { id: "rubber", label: "橡皮鸭" },
+  { id: "swim", label: "游水" },
+  { id: "fly", label: "起飞" },
+  { id: "hatch", label: "出壳" },
+  { id: "nap", label: "打盹" },
+  { id: "sailor", label: "水手" },
+  { id: "waddle", label: "带小鸭" },
+];
+
+export function isDuck(id) {
+  return DUCKS.some((item) => item.id === id);
+}
+
+export function badgeStyle(iconKey, iconColor) {
+  const color = iconColor || "#ff4b93";
+  if (isDuck(iconKey)) return { color, background: "transparent" };
+  return { background: color, color: "#fff" };
+}
+
+const LEGACY_SHAPES = [
   { id: "heart", d: "M32 54C20 44 8 36 8 24a12 12 0 0 1 22-7 12 12 0 0 1 22 7c0 12-12 20-20 30z" },
   { id: "circle", d: "M32 8a24 24 0 1 0 .1 0z" },
   { id: "squircle", d: "M20 8h24a12 12 0 0 1 12 12v24a12 12 0 0 1-12 12H20a12 12 0 0 1-12-12V20A12 12 0 0 1 20 8z" },
@@ -28,5 +49,5 @@ export const BOT_COLORS = [
 ];
 
 export function shapeById(id) {
-  return BOT_SHAPES.find((item) => item.id === id) || null;
+  return LEGACY_SHAPES.find((item) => item.id === id) || null;
 }

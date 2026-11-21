@@ -36,6 +36,12 @@ class Conversation(Base):
     model: Mapped[str] = mapped_column(String(128), default="deepseek-chat")
     permission_mode: Mapped[str] = mapped_column(String(16), default="auto")
     summary: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(16), default="chat")
+    room_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    member_name: Mapped[str] = mapped_column(String(64), default="")
+    member_prompt: Mapped[str] = mapped_column(Text, default="")
+    room_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    intake_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -57,6 +63,11 @@ class Message(Base):
     in_context: Mapped[bool] = mapped_column(Boolean, default=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    speaker: Mapped[str] = mapped_column(String(64), default="")
+    channel: Mapped[str] = mapped_column(String(16), default="public")
+    counterpart: Mapped[str] = mapped_column(String(64), default="")
+    handoff_target: Mapped[str] = mapped_column(String(64), default="")
+    card: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 

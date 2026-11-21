@@ -451,6 +451,9 @@ def build_model_messages(db, conversation, workspace: Path) -> list[dict]:
         "mcp": prompt_text(),
     }
     messages: list[dict] = [{"role": "system", "content": system_prompt(info)}]
+    role_note = (getattr(conversation, "member_prompt", None) or "").strip()
+    if role_note:
+        messages[0]["content"] += "\n\n你在群聊里的身份：\n" + role_note
     rows = db.scalars(
         select(Message)
         .where(

@@ -54,12 +54,19 @@ function liveSegments(message) {
       tools: message.tools || [],
       attachments: message.attachments || [],
       approval: message.approval,
-      question: message.question,
-      status: message.status,
-      createdAt: message.created_at,
-      id: message.id,
+        question: message.question,
+        card: message.card || null,
+        status: message.status,
+        createdAt: message.created_at,
+        id: message.id,
     },
   ];
+}
+
+function intakeCard(bucket) {
+  const host = [...bucket.messages].reverse().find((item) => item.card && item.card.question);
+  if (!host) return null;
+  return { ...host.card, message_id: host.id };
 }
 
 function presentTurn(bucket) {
@@ -73,6 +80,7 @@ function presentTurn(bucket) {
         attachments: message.attachments || [],
         approval: message.approval,
         question: message.question,
+        card: message.card || null,
         status: message.status,
         createdAt: message.created_at,
         id: message.id,
@@ -110,9 +118,10 @@ function presentTurn(bucket) {
     }
   }
   const created = segments.map((item) => item.createdAt).filter(Boolean);
-  return {
+    return {
     kind: "turn",
     id: bucket.messages[0]?.id || "turn",
+    speaker: bucket.speaker || bucket.messages.find((item) => item.speaker)?.speaker || "",
     streaming,
     question: bucket.question || "",
     notes,
@@ -122,6 +131,7 @@ function presentTurn(bucket) {
     attachments,
     approval: [...segments].reverse().find((item) => item.approval)?.approval || null,
     questionCard: [...segments].reverse().find((item) => item.question)?.question || null,
+    intake: intakeCard(bucket),
     answer: answer.map((item) => String(item.content || "").trim()).filter(Boolean).join("\n\n"),
     reasoning: answer.map((item) => item.reasoning).filter(Boolean).join("\n"),
     explore: exploreSummary(tools),
@@ -154,9 +164,20 @@ export function groupThread(messages) {
       bucket = { messages: [], question: message.content || "", startedAt: message.startedAt || null };
       continue;
     }
+    if (message.role === "assistant" && message.card) {
+      flush();
+      items.push(presentTurn({ messages: [message], question: "", startedAt: parseTime(message.created_at), speaker: message.speaker || "" }));
+      bucket = null;
+      continue;
+    }
     if (message.role !== "assistant") continue;
-    if (!bucket) bucket = { messages: [], question: "", startedAt: message.startedAt || null };
+    const speaker = message.speaker || "";
+    if (bucket?.messages.length && speaker && bucket.speaker && speaker !== bucket.speaker) {
+      flush();
+    }
+    if (!bucket) bucket = { messages: [], question: "", startedAt: message.startedAt || null, speaker };
     if (!bucket.startedAt && message.startedAt) bucket.startedAt = message.startedAt;
+    if (!bucket.speaker && speaker) bucket.speaker = speaker;
     bucket.messages.push(message);
   }
   flush();

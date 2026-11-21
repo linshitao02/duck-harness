@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 TEST_WORKSPACE = Path(tempfile.mkdtemp(prefix="harness-ws-"))
+TEST_UPLOADS = Path(tempfile.mkdtemp(prefix="harness-uploads-"))
 os.environ["DATABASE_URL"] = (
     "mysql+pymysql://harness:harness_local@127.0.0.1:3306/harness_test?charset=utf8mb4"
 )
@@ -16,6 +17,7 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key"
 os.environ["DEEPSEEK_BASE_URL"] = "https://api.deepseek.com"
 os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:11434"
 os.environ["HARNESS_WORKSPACE"] = str(TEST_WORKSPACE)
+os.environ["HARNESS_UPLOAD_DIR"] = str(TEST_UPLOADS)
 
 import pytest
 from sqlalchemy import text

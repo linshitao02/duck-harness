@@ -83,6 +83,7 @@ class ToolContext:
     origin_workspace: Path | None = None
     history_batch: str = ""
     agent_run_id: str = ""
+    room: dict | None = None
 
 
 @dataclass
@@ -92,6 +93,7 @@ class Tool:
     parameters: dict
     fn: object
     read_only: bool = False
+    group_only: bool = False
 
 
 def _decode_output(data: bytes) -> str:
@@ -1407,6 +1409,44 @@ def catalog_text(workspace: Path) -> str:
     return catalog(workspace)
 
 
+def _room_bag(ctx: ToolContext) -> dict | None:
+    room = getattr(ctx, "room", None)
+    return room if isinstance(room, dict) else None
+
+
+async def _handoff(args: dict, ctx: ToolContext) -> ToolResult:
+    room = _room_bag(ctx)
+    if room is None:
+        return ToolResult(False, "handoff 只能在群聊里使用")
+    target = str(args.get("target") or "").strip()
+    if target == "用户":
+        target = "user"
+    names = list(room.get("participants") or [])
+    if target not in names and target != "user":
+        return ToolResult(False, f"没有这个成员: {target}。可以交接给 {', '.join(names)} 或 user")
+    room["handoff"] = {"target": target, "content": str(args.get("content") or "")}
+    return ToolResult(True, f"已交接给 {target}")
+
+
+async def _send_private(args: dict, ctx: ToolContext) -> ToolResult:
+    room = _room_bag(ctx)
+    if room is None:
+        return ToolResult(False, "send_private 只能在群聊里使用")
+    target = str(args.get("to") or "").strip()
+    text = str(args.get("text") or "").strip()
+    names = list(room.get("participants") or [])
+    if target not in names:
+        return ToolResult(False, f"没有这个成员: {target}")
+    if target == str(room.get("speaker") or ""):
+        return ToolResult(False, "不用给自己发私聊")
+    if not text:
+        return ToolResult(False, "私聊内容是空的")
+    room.setdefault("private", []).append(
+        {"to": target, "text": text, "source": str(room.get("speaker") or "")}
+    )
+    return ToolResult(True, f"已私下发给 {target}，房间里其他人看不到")
+
+
 REGISTRY: list[Tool] = [
     Tool(
         "bash",
@@ -1637,6 +1677,34 @@ REGISTRY: list[Tool] = [
     ),
     Tool("system_info", "查看系统、Python、工作区和磁盘剩余空间。", _object({}, []), _system_info, True),
     Tool("open_path", "用系统默认程序打开工作区里的文件或目录。", _object({"path": _prop("string", "要打开的文件或目录，用工作区相对路径或绝对路径。")}, ["path"]), _open_path),
+    Tool(
+        "handoff",
+        "在群聊里指定下一位发言者。target 必须是成员名字，或 user 表示把这一轮交回用户。没有调用时，下一位仍是你自己。",
+        _object(
+            {
+                "target": _prop("string", "下一位成员的名字，或 user。"),
+                "content": _prop("string", "交给下一位的说明。不填就用你刚说的正文。"),
+            },
+            ["target"],
+        ),
+        _handoff,
+        True,
+        True,
+    ),
+    Tool(
+        "send_private",
+        "私下发给群里的某一个成员。这条内容只出现在你们两人的私聊里，不会进入群聊房间。",
+        _object(
+            {
+                "to": _prop("string", "收信成员的名字。"),
+                "text": _prop("string", "私聊正文。"),
+            },
+            ["to", "text"],
+        ),
+        _send_private,
+        True,
+        True,
+    ),
 ]
 
 BY_NAME = {tool.name: tool for tool in REGISTRY}
@@ -1652,7 +1720,9 @@ def schemas(allowed: list[str] | None = None, workspace: Path | None = None) -> 
     from .mcp_bridge import GENERIC, visible_bridged
 
     tools = list(REGISTRY)
-    if allowed is not None:
+    if allowed is None:
+        tools = [tool for tool in tools if not tool.group_only]
+    else:
         tools = [tool for tool in tools if tool.name in allowed]
     bridged = visible_bridged(allowed)
     if bridged and len(bridged) > 16:
@@ -1939,3 +2009,12 @@ from .extra_tools import register
 
 register(REGISTRY)
 BY_NAME = {tool.name: tool for tool in REGISTRY}
+
+
+def group_tool_names() -> list[str]:
+    """群成员能用的工具：普通工具，再加上只在房间里出现的交接和私聊。"""
+    names = [tool.name for tool in REGISTRY if not tool.group_only]
+    for name in ("handoff", "send_private"):
+        if name not in names:
+            names.append(name)
+    return names

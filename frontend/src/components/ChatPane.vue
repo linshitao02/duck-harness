@@ -17,7 +17,7 @@
         </svg>
       </button>
       <div class="title-pill">
-        <span class="logo" aria-hidden="true" :style="{ background: chat.active?.icon_color || '#ff4b93' }">
+        <span class="logo" aria-hidden="true" :style="badgeStyle(chat.active?.icon_key, chat.active?.icon_color)">
           <Badge :name="chat.active?.icon_key || 'spark'" />
         </span>
         <span class="title" data-testid="chat-title">{{ chat.active?.title || "新会话" }}</span>
@@ -41,9 +41,21 @@
     </header>
 
     <section ref="scroller" class="thread" data-testid="thread">
-      <div v-if="!chat.messages.length" class="empty">
+      <div v-if="openBundle" class="private-panel" data-testid="private-thread">
+        <p class="private-head">{{ chat.active?.member_name || chat.active?.title }} → {{ openBundle.counterpart }}</p>
+        <article v-for="note in openBundle.messages" :key="note.id" class="row" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+          <p class="speaker-line">{{ note.speaker }}</p>
+          <div class="bubble" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+            <div class="text" v-html="renderText(note.content)" />
+          </div>
+        </article>
+        <button type="button" class="close-private" data-testid="close-private" @click="openPrivate = ''">关闭聊天</button>
+      </div>
+      <template v-else>
+      <div v-if="!chat.messages.length && !(chat.privateThreads || []).length && !chat.intakeBusy" class="empty">
         <h1>{{ chat.active?.title || "新会话" }}</h1>
-        <p>直接说你要做的事。我可以改代码、跑本机命令、联网搜索，也会记住你的偏好。</p>
+        <p v-if="chat.active?.kind === 'group'">用 @成员名 把目标发给他。项目经理会拆开任务，再派给其他成员。</p>
+        <p v-else>直接说你要做的事。我可以改代码、跑本机命令、联网搜索，也会记住你的偏好。</p>
       </div>
       <template v-for="item in threadItems" :key="item.id">
         <div v-if="item.kind === 'divider'" class="new-divider"><span>新</span></div>
@@ -67,6 +79,7 @@
           </div>
         </article>
         <article v-else class="row assistant" data-testid="message">
+          <p v-if="item.speaker" class="speaker-line" data-testid="speaker-name">{{ item.speaker }}</p>
           <details v-if="item.notes.length || item.tools.length || item.streaming" class="work" data-testid="work-log" :open="isOpen(item, 'work')" @toggle="onToggle(item, 'work', $event)">
             <summary>
               <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
@@ -139,7 +152,47 @@
               </button>
             </div>
           </div>
+          <div v-if="item.intake" class="intake-card" data-testid="intake-card">
+            <p>{{ item.intake.question }}</p>
+            <p v-if="item.intake.choice" class="intake-picked">
+              <span class="intake-letter" :style="{ background: chat.active?.icon_color || '#1c1c1e', color: '#fff' }">{{ choiceLetter(item.intake) }}</span>
+              <span>{{ item.intake.choice }}</span>
+            </p>
+            <template v-else>
+              <button
+                v-for="(option, index) in item.intake.options"
+                :key="option"
+                type="button"
+                class="intake-option"
+                :data-testid="'intake-option-' + index"
+                :disabled="chat.intakeBusy"
+                @click="pickIntake(item.intake, option)"
+              >
+                <span class="intake-letter">{{ intakeLetter(index) }}</span>
+                <span>{{ option }}</span>
+              </button>
+              <input
+                v-if="otherFor === item.intake.message_id"
+                v-model="otherText"
+                class="intake-other"
+                data-testid="intake-other"
+                placeholder="补充一句，回车发送"
+                @keydown.enter.prevent="sendOther(item.intake)"
+              />
+            </template>
+          </div>
         </article>
+      </template>
+      <p v-if="chat.intakeBusy && !openBundle" class="intake-thinking" data-testid="intake-thinking">
+        <i></i><i></i><i></i>
+        <span>{{ thinkingLine }}</span>
+      </p>
+      <div v-if="!openBundle && (chat.privateThreads || []).length" class="private-folds">
+        <p v-for="bundle in chat.privateThreads" :key="bundle.counterpart" class="private-fold">
+          <span>{{ bundle.count }}条消息往来：</span>
+          <button type="button" data-testid="private-toggle" @click="openPrivate = bundle.counterpart">{{ bundle.counterpart }}</button>
+        </p>
+      </div>
       </template>
     </section>
     <Composer />
@@ -152,12 +205,56 @@ import { taskPhrase, toolPhrase } from "../activity";
 import { formatSize, renderText } from "../api";
 import { useChatStore } from "../store";
 import { groupThread, toolLine, workDuration } from "../turns";
+import { badgeStyle } from "../shapes";
 import Badge from "./Badge.vue";
 import Composer from "./Composer.vue";
 
 const chat = useChatStore();
 const threadItems = computed(() => groupThread(chat.messages));
+const otherFor = ref(null);
+const otherText = ref("");
+const thinkingLine = computed(() => {
+  const lines = ["正在整理思路", "正在琢磨", "正在想怎么开口"];
+  const title = chat.active?.title || "";
+  let sum = 0;
+  for (const ch of title) sum += ch.charCodeAt(0);
+  return lines[sum % lines.length];
+});
+
+function intakeLetter(index) {
+  return "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[index] || String(index + 1);
+}
+
+function choiceLetter(card) {
+  const options = card.options || [];
+  const index = options.indexOf(card.choice);
+  if (index >= 0) return intakeLetter(index);
+  const other = options.indexOf("其他");
+  return intakeLetter(other >= 0 ? other : 0);
+}
+
+function pickIntake(card, option) {
+  if (chat.intakeBusy || card.choice) return;
+  if (option === "其他") {
+    otherFor.value = card.message_id;
+    otherText.value = "";
+    return;
+  }
+  chat.answerIntake(card.message_id, option);
+}
+
+function sendOther(card) {
+  const text = otherText.value.trim();
+  otherFor.value = null;
+  chat.answerIntake(card.message_id, text || "其他");
+}
 const openState = ref({});
+const openPrivate = ref("");
+const openBundle = computed(() => (chat.privateThreads || []).find((item) => item.counterpart === openPrivate.value) || null);
+watch(() => chat.activeId, () => {
+  openPrivate.value = "";
+  otherFor.value = null;
+});
 
 function openKey(item, name) {
   return `${item.id}:${name}`;

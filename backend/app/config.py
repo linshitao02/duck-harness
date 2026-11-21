@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ROOT_DIR = BACKEND_DIR.parent
-UPLOAD_DIR = ROOT_DIR / "data" / "uploads"
+UPLOAD_DIR = Path(os.environ.get("HARNESS_UPLOAD_DIR") or (ROOT_DIR / "data" / "uploads"))
 
 
 class Settings(BaseSettings):

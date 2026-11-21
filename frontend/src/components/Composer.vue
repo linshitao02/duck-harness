@@ -20,7 +20,7 @@
         v-model="chat.draft"
         data-testid="composer"
         rows="1"
-        :placeholder="'给 ' + (chat.active?.title || '新会话') + ' 发消息'"
+        :placeholder="chat.active?.kind === 'group' ? '用 @成员名 说明目标，例如 @项目经理' : ('给 ' + (chat.active?.title || '新会话') + ' 发消息')"
         :spellcheck="chat.settings.spellcheck !== '0'"
         @input="grow"
         @keydown.enter="onEnter"

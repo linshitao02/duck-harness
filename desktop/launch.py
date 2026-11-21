@@ -31,9 +31,13 @@ def healthy() -> bool:
 def ensure_server():
     if healthy():
         return None
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8787"],
         cwd=str(BACKEND),
+        creationflags=flags,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     for _ in range(60):
         if healthy():

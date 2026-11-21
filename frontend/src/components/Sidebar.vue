@@ -9,6 +9,9 @@
       <button class="icon-btn" type="button" aria-label="搜索会话" data-testid="open-search" @mousedown.stop @click.stop="chat.searchOpen = !chat.searchOpen">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" /><path d="M16 16l4 4" /></svg>
       </button>
+      <button class="icon-btn" type="button" aria-label="刷新会话列表" data-testid="refresh-conversations" :disabled="refreshing" @mousedown.stop @click.stop="refreshList">
+        <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14.5 4.5L4 15" /><path d="M4 12a8 8 0 0 1 14.5-4.5L20 9" /><path d="M20 4v5h-5M4 20v-5h5" /></svg>
+      </button>
       <button class="icon-btn" type="button" aria-label="新会话" data-testid="new-chat" @mousedown.stop @click.stop="chat.botOpen = true">
         <svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12" /></svg>
       </button>
@@ -96,6 +99,7 @@ import Badge from "./Badge.vue";
 
 const chat = useChatStore();
 const editing = ref(null);
+const refreshing = ref(false);
 const menu = ref(null);
 const groupName = ref("");
 const renameInput = ref(null);
@@ -120,6 +124,19 @@ const sections = computed(() => {
   for (const [name, items] of groups) result.push({ name, items });
   return result;
 });
+
+async function refreshList() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    await chat.refreshConversations();
+    chat.notify("会话列表已更新");
+  } catch {
+    chat.notify("刷新会话列表失败");
+  } finally {
+    refreshing.value = false;
+  }
+}
 
 function openMenu(event, item) {
   const width = 232;

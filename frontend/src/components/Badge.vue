@@ -1,5 +1,6 @@
 <template>
-  <DuckIcon v-if="duck" :name="name" />
+  <GroupMark v-if="group" :name="name" />
+  <DuckIcon v-else-if="duck" :name="name" />
   <svg v-else-if="shape" viewBox="0 0 64 64" class="badge-shape">
     <path :d="shape.d" />
   </svg>
@@ -21,9 +22,11 @@
 <script setup>
 import { computed } from "vue";
 import DuckIcon from "./DuckIcon.vue";
-import { isDuck, shapeById } from "../shapes";
+import GroupMark from "./GroupMark.vue";
+import { isDuck, isGroup, shapeById } from "../shapes";
 
 const props = defineProps({ name: { type: String, default: "spark" } });
+const group = computed(() => isGroup(props.name));
 const duck = computed(() => isDuck(props.name));
-const shape = computed(() => (duck.value ? null : shapeById(props.name)));
+const shape = computed(() => (duck.value || group.value ? null : shapeById(props.name)));
 </script>

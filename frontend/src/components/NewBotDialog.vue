@@ -9,8 +9,55 @@
         <button type="button" data-testid="mode-chat" :class="{ selected: mode === 'chat' }" @click="mode = 'chat'">会话</button>
         <button type="button" data-testid="mode-group" :class="{ selected: mode === 'group' }" @click="mode = 'group'">群聊</button>
       </div>
+      <div class="bot-preview" :style="{ color }">
+        <GroupMark v-if="mode === 'group'" :name="groupId" live />
+        <DuckIcon v-else :name="shapeId" live />
+      </div>
+      <input v-if="mode === 'group'" v-model="groupTitle" data-testid="group-title" placeholder="群名称，不填就用成员名字" @keydown.enter="create" />
+      <input v-else v-model="name" data-testid="bot-name" placeholder="给你的 Agent 起个名字" @keydown.enter="create" />
+      <div class="shape-grid">
+        <template v-if="mode === 'group'">
+          <button
+            v-for="item in GROUPS"
+            :key="item.id"
+            type="button"
+            class="shape-btn"
+            :class="{ selected: item.id === groupId }"
+            :style="{ color }"
+            :aria-label="item.label"
+            @click="groupId = item.id"
+          >
+            <GroupMark :name="item.id" />
+          </button>
+        </template>
+        <template v-else>
+          <button
+            v-for="item in DUCKS"
+            :key="item.id"
+            type="button"
+            class="shape-btn"
+            :class="{ selected: item.id === shapeId }"
+            :style="{ color }"
+            :aria-label="item.label"
+            @click="shapeId = item.id"
+          >
+            <DuckIcon :name="item.id" />
+          </button>
+        </template>
+      </div>
+      <div class="color-grid">
+        <button
+          v-for="item in BOT_COLORS"
+          :key="item"
+          type="button"
+          class="color-btn"
+          :class="{ selected: item === color }"
+          :style="{ background: item }"
+          :aria-label="item"
+          @click="color = item"
+        />
+      </div>
       <template v-if="mode === 'group'">
-        <input v-model="groupTitle" data-testid="group-title" placeholder="群名称，不填就用成员名字" @keydown.enter="create" />
         <div v-if="picked.length" class="picked-list">
           <div v-for="(item, index) in picked" :key="item.id" class="picked-row">
             <span class="badge" :style="badgeStyle(item.icon_key, item.icon_color)"><Badge :name="item.icon_key" /></span>
@@ -44,36 +91,6 @@
           </button>
         </div>
       </template>
-      <div v-else class="bot-preview" :style="{ color }">
-        <DuckIcon :name="shapeId" live />
-      </div>
-      <input v-if="mode === 'chat'" v-model="name" data-testid="bot-name" placeholder="给你的 Agent 起个名字" @keydown.enter="create" />
-      <div v-if="mode === 'chat'" class="shape-grid">
-        <button
-          v-for="item in DUCKS"
-          :key="item.id"
-          type="button"
-          class="shape-btn"
-          :class="{ selected: item.id === shapeId }"
-          :style="{ color }"
-          :aria-label="item.label"
-          @click="shapeId = item.id"
-        >
-          <DuckIcon :name="item.id" />
-        </button>
-      </div>
-      <div v-if="mode === 'chat'" class="color-grid">
-        <button
-          v-for="item in BOT_COLORS"
-          :key="item"
-          type="button"
-          class="color-btn"
-          :class="{ selected: item === color }"
-          :style="{ background: item }"
-          :aria-label="item"
-          @click="color = item"
-        />
-      </div>
       <footer>
         <button type="button" class="text-btn" @click="chat.botOpen = false">取消</button>
         <button type="button" class="create-btn" :data-testid="mode === 'group' ? 'create-group' : 'create-bot'" :disabled="!canCreate" @click="create">
@@ -88,7 +105,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import Badge from "./Badge.vue";
 import DuckIcon from "./DuckIcon.vue";
-import { BOT_COLORS, DUCKS, badgeStyle } from "../shapes";
+import GroupMark from "./GroupMark.vue";
+import { BOT_COLORS, DUCKS, GROUPS, badgeStyle } from "../shapes";
 import { useChatStore } from "../store";
 
 const chat = useChatStore();
@@ -97,6 +115,7 @@ const name = ref("");
 const groupTitle = ref("");
 const selected = ref([]);
 const shapeId = ref(DUCKS[0].id);
+const groupId = ref(GROUPS[0].id);
 const color = ref(BOT_COLORS[0]);
 const standalone = computed(() => chat.conversations.filter((item) => (item.kind || "chat") === "chat" && !item.hidden));
 const available = computed(() => standalone.value.filter((item) => !item.room_id));
@@ -119,7 +138,12 @@ function removeMember(id) {
 function create() {
   if (!canCreate.value) return;
   if (mode.value === "group") {
-    chat.createGroup({ title: groupTitle.value.trim(), conversation_ids: picked.value.map((item) => item.id) });
+    chat.createGroup({
+      title: groupTitle.value.trim(),
+      conversation_ids: picked.value.map((item) => item.id),
+      icon_key: groupId.value,
+      icon_color: color.value,
+    });
     return;
   }
   const title = name.value.trim();

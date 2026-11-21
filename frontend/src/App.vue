@@ -1,4 +1,5 @@
 <template>
+  <Splash />
   <div class="shell">
     <Sidebar v-show="chat.sidebarOpen" :style="{ width: chat.sidebarWidth + 'px' }" />
     <div
@@ -38,6 +39,7 @@ import NewBotDialog from "./components/NewBotDialog.vue";
 import ConnectSheet from "./components/ConnectSheet.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import TextMenu from "./components/TextMenu.vue";
+import Splash from "./components/Splash.vue";
 
 const chat = useChatStore();
 const desktop = ref(false);

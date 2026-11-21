@@ -15,6 +15,7 @@ import webview
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 URL = "http://127.0.0.1:8787"
+WINDOW_URL = "http://127.0.0.1:8787/?splash=hd"
 GEOMETRY_FILE = Path.home() / "AppData" / "Local" / "DuckHarness" / "window.json"
 _geometry = {"x": None, "y": None, "width": 1280, "height": 840, "maximized": False, "sidebarWidth": 300, "sidebarOpen": True}
 _save_timer = None
@@ -268,7 +269,7 @@ def main():
     placed = _geometry["x"] is not None and _geometry["y"] is not None
     _window = webview.create_window(
         "duck-harness",
-        URL,
+        WINDOW_URL,
         js_api=DesktopApi(),
         width=_geometry["width"],
         height=_geometry["height"],

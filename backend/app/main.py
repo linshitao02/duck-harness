@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
     def index():
         page = DIST / "index.html"
         if page.exists():
-            return FileResponse(page)
+            return FileResponse(page, headers={"Cache-Control": "no-cache"})
         return {"service": "duck-harness", "hint": "前端还没构建。先在 frontend 目录执行 npm install 和 npm run build。"}
 
     @app.get("/{full_path:path}")
@@ -65,10 +65,11 @@ def create_app() -> FastAPI:
         if not str(target).startswith(str(DIST.resolve())):
             raise HTTPException(404, "找不到页面")
         if target.is_file():
-            return FileResponse(target)
+            headers = {"Cache-Control": "no-cache"} if "splash" in target.parts else None
+            return FileResponse(target, headers=headers)
         page = DIST / "index.html"
         if page.exists():
-            return FileResponse(page)
+            return FileResponse(page, headers={"Cache-Control": "no-cache"})
         raise HTTPException(404, "前端还没构建")
 
     return app

@@ -58,7 +58,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 }
 .badge-icon, .badge-shape { width: 18px; height: 18px; }
 .badge-shape { stroke: none; fill: currentColor; }
-.badge .duck-stage { width: 34px; height: 34px; }
+.badge .duck-stage, .badge .group-stage { width: 36px; height: 36px; }
 .unread-dot {
   position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
   background: var(--pink); border: 2px solid #fff;
@@ -119,7 +119,8 @@ textarea, input, .text, pre, .diff-view, .plan-preview { cursor: text; }
   display: grid; place-items: center; padding: 24px;
 }
 .bot-dialog {
-  width: min(460px, 100%); background: #fff; border-radius: 22px;
+  width: min(460px, 100%); max-height: min(760px, calc(100vh - 48px)); overflow: auto;
+  background: #fff; border-radius: 22px;
   box-shadow: 0 20px 60px rgba(28, 28, 40, .18); padding: 18px 22px 16px;
 }
 .mode-switch { display: flex; gap: 8px; margin: 12px 0; }
@@ -186,14 +187,14 @@ html[data-theme="dark"] .intake-other { background: #232328; color: #f3f3f5; bor
 .bot-dialog h2 { margin: 0; font-size: 18px; font-weight: 650; }
 .bot-dialog header button { border: 0; background: transparent; font-size: 22px; color: #666; }
 .bot-preview { display: grid; place-items: center; height: 128px; }
-.bot-preview .duck-stage { width: 112px; height: 112px; }
+.bot-preview .duck-stage, .bot-preview .group-stage { width: 112px; height: 112px; }
 .bot-dialog > input {
   width: 100%; border: 1px solid #ececef; border-radius: 12px; padding: 12px 14px; outline: none;
 }
 .shape-grid, .color-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
 .shape-btn, .color-btn { border: 0; background: transparent; padding: 2px; border-radius: 12px; }
-.shape-btn .duck-stage { width: 40px; height: 40px; }
-.shape-btn:hover .duck-stage { transform: translateY(-2px) rotate(-6deg); }
+.shape-btn .duck-stage, .shape-btn .group-stage { width: 40px; height: 40px; }
+.shape-btn:hover .duck-stage, .shape-btn:hover .group-stage { transform: translateY(-2px); }
 .shape-btn.selected, .color-btn.selected { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #c8c8ce; }
 .color-btn { width: 22px; height: 22px; border-radius: 50%; }
 .bot-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
@@ -247,7 +248,7 @@ body.col-resize, body.col-resize * { cursor: col-resize !important; user-select:
   width: 28px; height: 28px; border-radius: 9px; background: var(--pink); color: #fff;
   display: grid; place-items: center;
 }
-.logo .duck-stage { width: 26px; height: 26px; }
+.logo .duck-stage, .logo .group-stage { width: 26px; height: 26px; }
 .logo .badge-shape, .logo .badge-icon { width: 16px; height: 16px; }
 .logo .badge-shape { fill: #fff; stroke: none; }
 .logo .badge-icon { fill: none; stroke: #fff; }

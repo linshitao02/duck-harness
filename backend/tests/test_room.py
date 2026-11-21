@@ -172,9 +172,16 @@ def test_group_pulls_in_existing_conversations_and_keeps_them_when_deleted(clien
     second = client.post("/api/conversations", json={"title": "实现工程师", "icon_key": "circle", "icon_color": "#222222"}).json()
     created = client.post(
         "/api/groups",
-        json={"title": "加班费群", "conversation_ids": [second["id"], first["id"]]},
+        json={
+            "title": "加班费群",
+            "conversation_ids": [second["id"], first["id"]],
+            "icon_key": "talk",
+            "icon_color": "#3b82f6",
+        },
     ).json()
     assert created["kind"] == "group"
+    assert created["icon_key"] == "talk"
+    assert created["icon_color"] == "#3b82f6"
     listed = {item["id"]: item for item in client.get("/api/conversations").json()["items"]}
     assert listed[second["id"]]["room_id"] == created["id"]
     assert listed[second["id"]]["member_name"] == "实现工程师"

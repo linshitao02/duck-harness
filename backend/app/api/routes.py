@@ -79,6 +79,8 @@ class GroupIn(BaseModel):
     title: str = ""
     members: list[GroupMemberIn] = Field(default_factory=list)
     conversation_ids: list[int] = Field(default_factory=list)
+    icon_key: str | None = None
+    icon_color: str | None = None
 
 
 class ChatIn(BaseModel):
@@ -199,7 +201,14 @@ def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
 @router.post("/groups")
 def create_group_chat(body: GroupIn, db: Session = Depends(get_db)):
     try:
-        row = create_group(db, body.title, [item.model_dump() for item in body.members], body.conversation_ids)
+        row = create_group(
+            db,
+            body.title,
+            [item.model_dump() for item in body.members],
+            body.conversation_ids,
+            body.icon_key,
+            body.icon_color,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return serialize_conversation(row)

@@ -9,13 +9,26 @@ export const DUCKS = [
   { id: "waddle", label: "带小鸭" },
 ];
 
+export const GROUPS = [
+  { id: "flock", label: "一群" },
+  { id: "talk", label: "对话" },
+  { id: "ring", label: "围坐" },
+  { id: "relay", label: "交接" },
+  { id: "row", label: "并排" },
+  { id: "huddle", label: "聚拢" },
+];
+
 export function isDuck(id) {
   return DUCKS.some((item) => item.id === id);
 }
 
+export function isGroup(id) {
+  return GROUPS.some((item) => item.id === id);
+}
+
 export function badgeStyle(iconKey, iconColor) {
   const color = iconColor || "#ff4b93";
-  if (isDuck(iconKey)) return { color, background: "transparent" };
+  if (isDuck(iconKey) || isGroup(iconKey)) return { color, background: "transparent" };
   return { background: color, color: "#fff" };
 }
 

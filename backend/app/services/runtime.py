@@ -774,7 +774,13 @@ _MEMBER_COLORS = ["#8d5a3c", "#e23b3b", "#f08a24", "#3b82f6", "#7c4dff", "#3cbe5
 _MEMBER_ICONS = ["blob", "squircle", "diamond", "circle", "star", "drop"]
 
 
-def _link_existing_group(db, title: str, conversation_ids: list[int]) -> Conversation:
+def _group_mark(icon_key: str | None, icon_color: str | None) -> tuple[str, str]:
+    key = (icon_key or "flock").strip()[:32] or "flock"
+    color = (icon_color or "#f08a24").strip()[:16] or "#f08a24"
+    return key, color
+
+
+def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: str | None = None, icon_color: str | None = None) -> Conversation:
     chosen = []
     seen = set()
     for raw in conversation_ids:
@@ -808,8 +814,8 @@ def _link_existing_group(db, title: str, conversation_ids: list[int]) -> Convers
         model=stored["deepseek_model"] if stored["provider"] == "deepseek" else stored["ollama_model"],
         permission_mode=stored["permission_mode"],
         workspace=stored["workspace"],
-        icon_key="burst",
-        icon_color="#1c1c1e",
+        icon_key=_group_mark(icon_key, icon_color)[0],
+        icon_color=_group_mark(icon_key, icon_color)[1],
         kind="group",
         room_state={
             "current_speaker": names[0],
@@ -830,9 +836,16 @@ def _link_existing_group(db, title: str, conversation_ids: list[int]) -> Convers
     return group
 
 
-def create_group(db, title: str, members: list[dict] | None = None, conversation_ids: list[int] | None = None) -> Conversation:
+def create_group(
+    db,
+    title: str,
+    members: list[dict] | None = None,
+    conversation_ids: list[int] | None = None,
+    icon_key: str | None = None,
+    icon_color: str | None = None,
+) -> Conversation:
     if conversation_ids:
-        return _link_existing_group(db, title, conversation_ids)
+        return _link_existing_group(db, title, conversation_ids, icon_key, icon_color)
     members = members or []
     cleaned = []
     for item in members:
@@ -850,6 +863,7 @@ def create_group(db, title: str, members: list[dict] | None = None, conversation
         raise ValueError("成员不能叫 user")
     stored = all_settings(db)
     group_title = (title or "").strip() or "、".join(names)
+    mark, tint = _group_mark(icon_key, icon_color)
     group = Conversation(
         title=group_title[:255],
         preview="",
@@ -857,8 +871,8 @@ def create_group(db, title: str, members: list[dict] | None = None, conversation
         model=stored["deepseek_model"] if stored["provider"] == "deepseek" else stored["ollama_model"],
         permission_mode=stored["permission_mode"],
         workspace=stored["workspace"],
-        icon_key="burst",
-        icon_color="#1c1c1e",
+        icon_key=mark,
+        icon_color=tint,
         kind="group",
         room_state={"current_speaker": names[0], "current_turn": 0, "max_turns": 6, "member_ids": []},
     )

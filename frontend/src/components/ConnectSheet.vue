@@ -7,6 +7,9 @@
       </header>
       <div class="sheet-body">
         <div class="status-row">
+          <span>数据库</span><b>{{ databaseDetail }}</b>
+        </div>
+        <div class="status-row">
           <span>本机终端</span><b>已连接</b>
         </div>
         <div class="status-row">
@@ -111,6 +114,10 @@ watch(
   },
 );
 const ollamaDetail = computed(() => chat.doctor?.checks?.find((item) => item.name === "ollama")?.detail || "检查中");
+const databaseDetail = computed(() => {
+  const item = (chat.doctor?.checks || []).find((row) => row.name === "mysql" || row.name === "sqlite");
+  return item?.detail || "检查中";
+});
 
 function saveWorkspace() {
   chat.saveSettings({ workspace: workspace.value });

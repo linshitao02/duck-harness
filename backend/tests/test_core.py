@@ -168,7 +168,11 @@ def test_readonly_commands_follow_parsed_allowlist():
 def test_health_settings_and_conversation_crud(client):
     health = client.get("/api/health")
     assert health.status_code == 200
-    assert health.json()["mysql"] is True
+    body = health.json()
+    assert body["database"] in {"mysql", "sqlite"}
+    assert body[body["database"]] is True
+    assert body["mysql"] is (body["database"] == "mysql")
+    assert body["sqlite"] is (body["database"] == "sqlite")
 
     created = client.post("/api/conversations", json={"title": "验收会话"}).json()
     listed = client.get("/api/conversations").json()["items"]
@@ -501,7 +505,8 @@ def test_slash_doctor_mode_and_models(client):
     assert refreshed["permission_mode"] == "plan"
     doctor = client.get("/api/doctor").json()
     names = {item["name"]: item for item in doctor["checks"]}
-    assert names["mysql"]["ok"] is True
+    database_check = names.get("mysql") or names["sqlite"]
+    assert database_check["ok"] is True
     assert names["deepseek_key"]["ok"] is True
     assert names["python"]["ok"] is True
     models = client.get("/api/models").json()

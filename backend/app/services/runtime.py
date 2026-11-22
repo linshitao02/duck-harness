@@ -340,12 +340,15 @@ def usage_summary(db) -> dict:
 
 
 async def doctor(db) -> dict:
+    from ..db import database_info
+
     checks = []
+    info = database_info()
     try:
         db.execute(text("SELECT 1"))
-        checks.append({"name": "mysql", "ok": True, "detail": "已连接"})
+        checks.append({"name": info["database"], "ok": True, "detail": info["detail"]})
     except Exception as exc:
-        checks.append({"name": "mysql", "ok": False, "detail": str(exc)})
+        checks.append({"name": info["database"], "ok": False, "detail": str(exc)})
     _base, has_key_value, _source = deepseek_credentials(db)
     checks.append({"name": "deepseek_key", "ok": bool(has_key_value), "detail": "已配置" if has_key_value else "未配置"})
     base = all_settings(db).get("ollama_base") or get_settings().ollama_base_url
@@ -368,7 +371,7 @@ async def doctor(db) -> dict:
     dist = ROOT_DIR / "frontend" / "dist" / "index.html"
     checks.append({"name": "frontend", "ok": dist.exists(), "detail": "已构建" if dist.exists() else "尚未构建"})
     checks.append({"name": "python", "ok": True, "detail": platform.python_version()})
-    required = {"mysql", "workspace"}
+    required = {info["database"], "workspace"}
     ready = all(item["ok"] for item in checks if item["name"] in required) and any(
         item["ok"] for item in checks if item["name"] in {"deepseek_key", "ollama"}
     )

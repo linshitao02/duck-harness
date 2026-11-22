@@ -143,12 +143,22 @@ def sse(payload: dict) -> str:
 
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
-    report = {"service": "duck-harness", "mysql": False}
+    from ..db import database_info
+
+    info = database_info()
+    report = {
+        "service": "duck-harness",
+        "database": info["database"],
+        "reason": info["reason"],
+        "detail": info["detail"],
+        "mysql": False,
+        "sqlite": False,
+    }
     try:
         from sqlalchemy import text
 
         db.execute(text("SELECT 1"))
-        report["mysql"] = True
+        report[info["database"]] = True
     except Exception as exc:
         report["error"] = str(exc)
     return report

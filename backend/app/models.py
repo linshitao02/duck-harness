@@ -1,10 +1,42 @@
+import json
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
 from .db import Base
+
+
+class PortableJSON(TypeDecorator):
+    """MySQL 用 JSON 列，SQLite 用 TEXT 保存同一份 JSON。"""
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "mysql":
+            return dialect.type_descriptor(JSON())
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value, dialect):
+        if dialect.name == "mysql":
+            return value
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False)
+
+    def process_result_value(self, value, dialect):
+        if dialect.name == "mysql" or value is None or isinstance(value, (dict, list, int, float)):
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8")
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            return json.loads(text)
+        return value
 
 
 def _now() -> datetime:
@@ -40,8 +72,8 @@ class Conversation(Base):
     room_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     member_name: Mapped[str] = mapped_column(String(64), default="")
     member_prompt: Mapped[str] = mapped_column(Text, default="")
-    room_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    intake_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    room_state: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
+    intake_state: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -56,7 +88,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text, default="")
     reasoning: Mapped[str] = mapped_column(Text, default="")
-    tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tool_calls: Mapped[list | None] = mapped_column(PortableJSON, nullable=True)
     tool_call_id: Mapped[str] = mapped_column(String(80), default="")
     tool_name: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(16), default="done")
@@ -67,7 +99,7 @@ class Message(Base):
     channel: Mapped[str] = mapped_column(String(16), default="public")
     counterpart: Mapped[str] = mapped_column(String(64), default="")
     handoff_target: Mapped[str] = mapped_column(String(64), default="")
-    card: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    card: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -134,8 +166,8 @@ class McpServer(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
     command: Mapped[str] = mapped_column(Text)
-    args: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    env: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    args: Mapped[list | None] = mapped_column(PortableJSON, nullable=True)
+    env: Mapped[dict | None] = mapped_column(PortableJSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

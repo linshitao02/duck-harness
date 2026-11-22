@@ -8,9 +8,10 @@ sys.path.insert(0, str(ROOT))
 
 TEST_WORKSPACE = Path(tempfile.mkdtemp(prefix="harness-ws-"))
 TEST_UPLOADS = Path(tempfile.mkdtemp(prefix="harness-uploads-"))
-os.environ["DATABASE_URL"] = (
-    "mysql+pymysql://harness:harness_local@127.0.0.1:3306/harness_test?charset=utf8mb4"
-)
+TEST_SQLITE = Path(tempfile.mkdtemp(prefix="harness-sqlite-"))
+MYSQL_TEST_URL = "mysql+pymysql://harness:harness_local@127.0.0.1:3306/harness_test?charset=utf8mb4"
+os.environ["DATABASE_URL"] = os.environ.get("HARNESS_TEST_DATABASE_URL") or MYSQL_TEST_URL
+os.environ["HARNESS_SQLITE_PATH"] = str(TEST_SQLITE / "fallback.sqlite")
 os.environ["AUTO_SEED"] = "false"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["DEEPSEEK_API_KEY"] = "test-key"
@@ -28,10 +29,11 @@ from app.agent.providers import hub
 from app.agent.state import JOBS, PLAN_RETURN, READS
 from app.agent.tools import ApprovalBroker, ToolContext, broker
 from app.config import reset_settings_cache
-from app.db import Base, get_engine, init_db, open_session
-from app.services.runtime import ensure_defaults
 
 reset_settings_cache()
+
+from app.db import Base, database_info, get_engine, init_db, open_session
+from app.services.runtime import ensure_defaults
 
 
 @pytest.fixture(autouse=True)
@@ -39,10 +41,12 @@ def clean_database():
     init_db()
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        if engine.dialect.name == "mysql":
+            conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(table.delete())
-        conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
+        if engine.dialect.name == "mysql":
+            conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
     db = open_session()
     try:
         ensure_defaults(db)
@@ -109,6 +113,11 @@ def ctx(db, tmp_path):
         hub=hub,
     )
     return context
+
+
+def pytest_report_header(config):
+    info = database_info()
+    return f"database: {info['database']} ({info['reason']}) {info['detail']}"
 
 
 def events_from(raw: str) -> list[dict]:

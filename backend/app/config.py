@@ -9,6 +9,11 @@ ROOT_DIR = BACKEND_DIR.parent
 UPLOAD_DIR = Path(os.environ.get("HARNESS_UPLOAD_DIR") or (ROOT_DIR / "data" / "uploads"))
 
 
+def sqlite_file() -> Path:
+    raw = os.environ.get("HARNESS_SQLITE_PATH", "").strip()
+    return Path(raw) if raw else (ROOT_DIR / "data" / "harness.sqlite")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(BACKEND_DIR / ".env"),
@@ -16,9 +21,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = (
-        "mysql+pymysql://harness:harness_local@127.0.0.1:3306/harness?charset=utf8mb4"
-    )
+    database_url: str = ""
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     ollama_base_url: str = "http://127.0.0.1:11434"

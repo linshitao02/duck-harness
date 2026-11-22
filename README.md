@@ -17,7 +17,7 @@
   <sub>工作区里原来没有这两个文件。它写好 <code>stats.py</code> 和 <code>test_stats.py</code>，<code>python -m unittest test_stats</code> 的 3 个测试全部通过。</sub>
 </p>
 
-网页和桌面用的是同一套界面、同一份会话。后端是 Python，会话、记忆、任务和用量记在 MySQL。模型可以接 DeepSeek，也可以接本机 Ollama。
+网页和桌面用的是同一套界面、同一份会话。后端是 Python，会话、记忆、任务和用量记在本机 SQLite 里。模型可以接 DeepSeek，也可以接本机 Ollama。
 
 ## 演示
 
@@ -63,10 +63,9 @@
 
 ## 快速开始
 
-需要 Python 3.11+、Node.js、MySQL 8。
+需要 Python 3.11+ 和 Node.js。数据库用 Python 自带的 SQLite，启动时自动建表，文件在 `data/harness.sqlite`。
 
 ```bat
-mysql -u root -p < sql\init.sql
 cd backend
 copy .env.example .env
 pip install -r requirements.txt
@@ -89,13 +88,17 @@ DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DE
 
 | 变量 | 作用 |
 | --- | --- |
-| `DATABASE_URL` | MySQL 连接串。示例库名 `harness`，账号 `harness` |
+| `DATABASE_URL` | 留空即可。数据写在 `data/harness.sqlite` |
 | `DEEPSEEK_API_KEY` | DeepSeek 密钥。留空时可以改在界面里填写 |
 | `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `OLLAMA_BASE_URL` | 默认 `http://127.0.0.1:11434` |
 | `HARNESS_WORKSPACE` | 新会话的默认工作区。留空时用本仓库目录 |
 
-`sql/init.sql` 用来建库和基础表。服务启动时会建表，并补上后来增加的字段。`AUTO_SEED=true` 时，第一次打开会放进一组示例会话。
+服务启动时会自己建表，并补上后来增加的字段。`AUTO_SEED=true` 时，第一次打开会放进一组示例会话。
+
+### 可选：改用 MySQL
+
+已经有 MySQL 时，可以把 `DATABASE_URL` 写成连接串。启动连得上就用 MySQL，连不上会自动回到 SQLite。建库可以执行 `mysql -u root -p < sql\init.sql`。不装 MySQL 也能完整使用。
 
 ## 目录
 
@@ -103,7 +106,7 @@ DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DE
 backend/     FastAPI、工具循环、群聊、权限和测试
 frontend/    Vue 3 + Pinia 界面
 desktop/     pywebview 桌面壳
-sql/         MySQL 初始结构
+sql/         可选的 MySQL 建库脚本
 docs/        架构说明和界面图
 ```
 

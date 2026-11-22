@@ -32,35 +32,22 @@
         <li v-for="(item, index) in statuses" :key="item" :class="{ on: index === activeStatus }">{{ item }}</li>
       </ol>
       <h1>Duck</h1>
-      <p class="welcome">{{ mode === "login" ? "欢迎回来" : "建立你的工作台" }}</p>
-      <p class="sub">{{ mode === "login" ? "登录后只看自己的会话和文件" : "注册后会话、设置和文件都会分开" }}</p>
+      <p class="welcome">欢迎回来</p>
+      <p class="sub">登录后只看自己的会话和文件</p>
       <form @submit.prevent="submit">
         <label>
           用户名
           <input v-model="username" data-testid="login-username" autocomplete="username" maxlength="32" />
         </label>
-        <label v-if="mode === 'register'">
-          显示名
-          <input v-model="displayName" data-testid="login-name" autocomplete="nickname" maxlength="64" />
-        </label>
         <label>
           密码
-          <input
-            v-model="password"
-            data-testid="login-password"
-            type="password"
-            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-            maxlength="72"
-          />
+          <input v-model="password" data-testid="login-password" type="password" autocomplete="current-password" maxlength="72" />
         </label>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
         <button class="submit" type="submit" data-testid="login-submit" :disabled="busy">
-          {{ busy ? "正在进入" : mode === "login" ? "进入" : "注册并进入" }}
+          {{ busy ? "正在进入" : "进入" }}
         </button>
       </form>
-      <button class="switch" type="button" data-testid="login-switch" @click="toggle">
-        {{ mode === "login" ? "没有账号，去注册" : "已有账号，去登录" }}
-      </button>
       <pre class="term" aria-hidden="true">{{ typed }}<b>_</b></pre>
     </section>
   </div>
@@ -73,10 +60,8 @@ import { api } from "../api";
 const emit = defineEmits(["success"]);
 const motion = ref(!window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 const live = ref(true);
-const mode = ref("login");
 const username = ref("");
 const password = ref("");
-const displayName = ref("");
 const busy = ref(false);
 const error = ref("");
 const activeStatus = ref(0);
@@ -86,11 +71,6 @@ const statuses = ["待命", "核验身份", "打开工作区", "进入会话"];
 const lines = ["> initializing duck", "> loading workspace", "> ready"];
 let statusTimer = 0;
 let typeTimer = 0;
-
-function toggle() {
-  mode.value = mode.value === "login" ? "register" : "login";
-  error.value = "";
-}
 
 async function submit() {
   error.value = "";
@@ -105,13 +85,11 @@ async function submit() {
   }
   busy.value = true;
   try {
-    const path = mode.value === "login" ? "/api/auth/login" : "/api/auth/register";
-    await api(path, {
+    await api("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({
         username: name,
         password: password.value,
-        name: displayName.value.trim(),
         remember: true,
       }),
     });
@@ -222,7 +200,7 @@ input {
 }
 input:focus { border-color: #ffc27a; box-shadow: 0 0 0 3px rgba(244, 168, 84, 0.18); }
 .error { margin: 0; color: #ffb4c8; font-size: 13px; }
-.submit, .switch {
+.submit {
   border: 0;
   background: transparent;
   color: inherit;
@@ -235,7 +213,6 @@ input:focus { border-color: #ffc27a; box-shadow: 0 0 0 3px rgba(244, 168, 84, 0.
   font-weight: 700;
 }
 .submit:disabled { opacity: 0.6; }
-.switch { margin-top: 12px; padding: 0; text-align: left; color: #ffc27a; font-size: 13px; white-space: nowrap; }
 .term {
   margin: 22px 0 0;
   min-height: 4.2em;

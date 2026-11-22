@@ -71,6 +71,19 @@ export const useChatStore = defineStore("chat", {
     sidebarItems(state) {
       return state.conversations.filter((item) => !item.hidden);
     },
+    membersOf() {
+      return (roomId) => {
+        const id = Number(roomId);
+        if (!id) return [];
+        const group = this.conversations.find((item) => item.id === id);
+        const ids = Array.isArray(group?.member_ids) ? group.member_ids.map(Number) : [];
+        if (ids.length) {
+          const byId = new Map(this.conversations.map((item) => [item.id, item]));
+          return ids.map((item) => byId.get(item)).filter(Boolean);
+        }
+        return this.conversations.filter((item) => item.room_id === id);
+      };
+    },
   },
   actions: {
     rememberLayout() {
@@ -333,6 +346,7 @@ export const useChatStore = defineStore("chat", {
         status: "done",
       });
       this.messages.push(assistant);
+      assistant = this.messages[this.messages.length - 1];
       window.clearTimeout(activityTimer);
       activityTimer = window.setTimeout(() => {
         if (assistant.status === "streaming" && !String(assistant.content || "").trim()) assistant.phase = "working";
@@ -368,6 +382,7 @@ export const useChatStore = defineStore("chat", {
                   segment: { id: "", content: "", reasoning: "", tools: [], attachments: [] },
                 };
                 this.messages.push(assistant);
+                assistant = this.messages[this.messages.length - 1];
               } else {
                 assistant.speaker = named;
               }
@@ -409,6 +424,11 @@ export const useChatStore = defineStore("chat", {
       if (event.type === "token") {
         segment.content += event.text || "";
         assistant.content += event.text || "";
+        if (event.speaker) {
+          assistant.handoff_target = event.handoff_target || "";
+          segment.handoff_target = assistant.handoff_target;
+          assistant.status = "done";
+        }
       }
       if (event.type === "reasoning") {
         segment.reasoning += event.text || "";

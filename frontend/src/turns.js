@@ -46,7 +46,15 @@ export function exploreSummary(tools) {
 function liveSegments(message) {
   const segments = [...(message.segments || [])];
   if (message.segment) segments.push(message.segment);
-  if (segments.length) return segments.map((item) => ({ ...item, status: message.status, createdAt: message.created_at }));
+  const handoff = message.handoff_target || "";
+  if (segments.length) {
+    return segments.map((item) => ({
+      ...item,
+      status: message.status,
+      createdAt: message.created_at,
+      handoff_target: item.handoff_target || handoff,
+    }));
+  }
   return [
     {
       content: message.content || "",
@@ -54,11 +62,12 @@ function liveSegments(message) {
       tools: message.tools || [],
       attachments: message.attachments || [],
       approval: message.approval,
-        question: message.question,
-        card: message.card || null,
-        status: message.status,
-        createdAt: message.created_at,
-        id: message.id,
+      question: message.question,
+      card: message.card || null,
+      status: message.status,
+      createdAt: message.created_at,
+      handoff_target: handoff,
+      id: message.id,
     },
   ];
 }
@@ -91,7 +100,13 @@ function presentTurn(bucket) {
   const streaming = segments.some((item) => item.status === "streaming");
   let process = [];
   let answer = [];
-  if (streaming) {
+  const published = bucket.speaker
+    ? segments.map((item) => String(item.content || "").trim()).filter(Boolean)
+    : [];
+  if (bucket.speaker && published.length) {
+    process = segments.filter((item) => (item.tools || []).length).map((item) => ({ ...item, content: "" }));
+    answer = [{ content: published.join("\n\n") }];
+  } else if (streaming) {
     const last = segments[segments.length - 1];
     if (segments.length > 1 && last && !(last.tools || []).length) {
       process = segments.slice(0, -1);

@@ -70,7 +70,7 @@
         </div>
         <p class="picker-label">选择已有会话</p>
         <div class="agent-picker" data-testid="agent-picker">
-          <p v-if="!available.length && !busy.length" class="picker-empty">还没有可选会话。先在「会话」里建好 Agent，再拉进群。</p>
+          <p v-if="!available.length" class="picker-empty">还没有可选会话。先在「会话」里建好 Agent，再拉进群。</p>
           <button
             v-for="item in available"
             :key="item.id"
@@ -83,11 +83,6 @@
             <span class="badge" :style="badgeStyle(item.icon_key, item.icon_color)"><Badge :name="item.icon_key" /></span>
             <span class="who">{{ item.title }}</span>
             <span class="add-label">{{ selected.includes(item.id) ? "已添加" : "添加到群聊" }}</span>
-          </button>
-          <button v-for="item in busy" :key="item.id" type="button" class="agent-option" disabled>
-            <span class="badge" :style="badgeStyle(item.icon_key, item.icon_color)"><Badge :name="item.icon_key" /></span>
-            <span class="who">{{ item.title }}</span>
-            <span class="add-label">已在群里</span>
           </button>
         </div>
       </template>
@@ -117,9 +112,7 @@ const selected = ref([]);
 const shapeId = ref(DUCKS[0].id);
 const groupId = ref(GROUPS[0].id);
 const color = ref(BOT_COLORS[0]);
-const standalone = computed(() => chat.conversations.filter((item) => (item.kind || "chat") === "chat" && !item.hidden));
-const available = computed(() => standalone.value.filter((item) => !item.room_id));
-const busy = computed(() => standalone.value.filter((item) => item.room_id));
+const available = computed(() => chat.conversations.filter((item) => (item.kind || "chat") === "chat" && !item.hidden));
 const picked = computed(() => selected.value.map((id) => chat.conversations.find((item) => item.id === id)).filter(Boolean));
 const canCreate = computed(() => {
   if (mode.value === "group") return picked.value.length >= 2;

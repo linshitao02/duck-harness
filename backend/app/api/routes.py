@@ -25,12 +25,12 @@ from ..services.runtime import (
     delete_conversation,
     doctor,
     list_conversations,
+    present_conversation,
     present_messages,
     private_threads,
     deepseek_credentials,
     public_settings,
     serialize_attachment,
-    serialize_conversation,
     PERMISSION_MODES,
     canonical_mode,
     ensure_user_settings,
@@ -279,7 +279,7 @@ def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
     )
     db.add(row)
     db.commit()
-    return serialize_conversation(row)
+    return present_conversation(db, row)
 
 
 @router.post("/groups")
@@ -295,7 +295,7 @@ def create_group_chat(body: GroupIn, db: Session = Depends(get_db)):
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return serialize_conversation(row)
+    return present_conversation(db, row)
 
 
 @router.patch("/conversations/{conversation_id}")
@@ -319,7 +319,7 @@ def patch_conversation(conversation_id: int, body: ConversationPatch, db: Sessio
 
     row.updated_at = datetime.now()
     db.commit()
-    return serialize_conversation(row)
+    return present_conversation(db, row)
 
 
 @router.delete("/conversations/{conversation_id}")

@@ -288,17 +288,13 @@ const roomId = computed(() => {
   if (!active) return null;
   return active.kind === "group" ? active.id : active.room_id || null;
 });
-const roomMembers = computed(() => {
-  if (!roomId.value) return [];
-  return chat.conversations.filter((item) => item.room_id === roomId.value);
-});
+const roomMembers = computed(() => chat.membersOf(roomId.value));
 
 function roomPeople() {
   const active = chat.active;
   if (!active) return [];
   const id = active.kind === "group" ? active.id : active.room_id;
-  if (!id) return [];
-  return chat.conversations.filter((item) => item.room_id === id);
+  return chat.membersOf(id);
 }
 
 function person(name) {

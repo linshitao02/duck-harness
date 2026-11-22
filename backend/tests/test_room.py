@@ -8,6 +8,7 @@ from app.agent.room import RoomMessage, SwarmRoom, normalize_max_turns
 from app.agent.tools import ToolContext, execute, schemas
 from app.db import open_session
 from app.models import Conversation
+from app.services.runtime import room_members
 
 
 def test_swarm_follows_the_last_handoff_and_stops_for_the_user():
@@ -108,6 +109,9 @@ def test_group_room_runs_the_handoff_chain_and_hides_private_messages(client):
                 events.append(event)
 
             await run_group_turn(db, group, "做一版求职助手方案", emit, "room-token", speaker=speak)
+            tokens = [event for event in events if event["type"] == "token"]
+            assert [event["text"] for event in tokens] == ["先写方案", "初稿在这里", "有两个高风险"]
+            assert [event["handoff_target"] for event in tokens] == ["方案设计师", "风险评审员", "user"]
             return [event["name"] for event in events if event["type"] == "speaker"]
         finally:
             db.close()
@@ -211,6 +215,46 @@ def test_group_pulls_in_existing_conversations_and_keeps_them_when_deleted(clien
     assert left[first["id"]]["room_id"] is None
     assert left[first["id"]]["member_name"] == ""
     assert left[second["id"]]["room_id"] is None
+
+
+def test_chat_can_join_a_second_group(client):
+    manager = client.post("/api/conversations", json={"title": "项目经理"}).json()
+    builder = client.post("/api/conversations", json={"title": "实现工程师"}).json()
+    reviewer = client.post("/api/conversations", json={"title": "验收工程师"}).json()
+    first = client.post(
+        "/api/groups",
+        json={"title": "加班费群", "conversation_ids": [builder["id"], manager["id"]]},
+    ).json()
+    second = client.post(
+        "/api/groups",
+        json={"title": "财务-加班费计算", "conversation_ids": [builder["id"], reviewer["id"]]},
+    ).json()
+    assert second["member_ids"] == [builder["id"], reviewer["id"]]
+    listed = {item["id"]: item for item in client.get("/api/conversations").json()["items"]}
+    assert listed[builder["id"]]["room_id"] == first["id"]
+    assert set(listed[builder["id"]]["room_ids"]) == {first["id"], second["id"]}
+    assert listed[builder["id"]]["member_name"] == "实现工程师"
+    assert listed[manager["id"]]["room_ids"] == [first["id"]]
+
+    db = open_session()
+    try:
+        group = db.get(Conversation, second["id"])
+        assert [row.member_name for row in room_members(db, group)] == ["实现工程师", "验收工程师"]
+    finally:
+        db.close()
+
+    assert client.delete(f"/api/conversations/{first['id']}").status_code == 200
+    left = {item["id"]: item for item in client.get("/api/conversations").json()["items"]}
+    assert left[builder["id"]]["room_id"] == second["id"]
+    assert left[builder["id"]]["member_name"] == "实现工程师"
+    assert left[builder["id"]]["room_ids"] == [second["id"]]
+    assert left[manager["id"]]["room_id"] is None
+
+    assert client.delete(f"/api/conversations/{second['id']}").status_code == 200
+    left = {item["id"]: item for item in client.get("/api/conversations").json()["items"]}
+    assert left[builder["id"]]["room_id"] is None
+    assert left[builder["id"]]["member_name"] == ""
+    assert left[reviewer["id"]]["room_id"] is None
 
 
 def test_group_rejects_a_single_existing_conversation(client):

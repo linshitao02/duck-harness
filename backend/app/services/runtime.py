@@ -291,7 +291,51 @@ def deepseek_credentials(db) -> tuple[str, str, str]:
     return base.rstrip("/"), key, source
 
 
-def serialize_conversation(row: Conversation) -> dict:
+def _id_list(values) -> list[int]:
+    found = []
+    for item in values or []:
+        try:
+            key = int(item)
+        except (TypeError, ValueError):
+            continue
+        if key not in found:
+            found.append(key)
+    return found
+
+
+def _member_id_list(group: Conversation) -> list[int]:
+    return _id_list((group.room_state or {}).get("member_ids"))
+
+
+def membership_index(db) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+    """群到成员、会话到所在群。room_id 仍表示第一次加入的群。"""
+    statement = select(Conversation).where(Conversation.kind == "group")
+    linked = select(Conversation).where(Conversation.room_id.is_not(None), Conversation.kind != "group")
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(Conversation.user_id == uid)
+        linked = linked.where(Conversation.user_id == uid)
+    group_members: dict[int, list[int]] = {}
+    rooms_of: dict[int, list[int]] = {}
+    for group in db.scalars(statement).all():
+        ids = _member_id_list(group)
+        group_members[group.id] = ids
+        for member_id in ids:
+            rooms = rooms_of.setdefault(member_id, [])
+            if group.id not in rooms:
+                rooms.append(group.id)
+    for row in db.scalars(linked).all():
+        rooms = rooms_of.setdefault(row.id, [])
+        if row.room_id not in rooms:
+            rooms.append(row.room_id)
+        members = group_members.setdefault(row.room_id, [])
+        if row.id not in members:
+            members.append(row.id)
+    return group_members, rooms_of
+
+
+def serialize_conversation(row: Conversation, group_members: dict[int, list[int]] | None = None, rooms_of: dict[int, list[int]] | None = None) -> dict:
+    kind = row.kind or "chat"
     return {
         "id": row.id,
         "title": row.title,
@@ -307,11 +351,18 @@ def serialize_conversation(row: Conversation) -> dict:
         "permission_mode": row.permission_mode,
         "workspace": row.workspace or "",
         "summary": row.summary or "",
-        "kind": row.kind or "chat",
+        "kind": kind,
         "room_id": row.room_id,
+        "room_ids": list((rooms_of or {}).get(row.id) or []),
+        "member_ids": list((group_members or {}).get(row.id) or []) if kind == "group" else [],
         "member_name": row.member_name or "",
         "updated_at": row.updated_at.isoformat(sep=" ", timespec="seconds") if row.updated_at else "",
     }
+
+
+def present_conversation(db, row: Conversation) -> dict:
+    group_members, rooms_of = membership_index(db)
+    return serialize_conversation(row, group_members, rooms_of)
 
 
 def serialize_attachment(row: Attachment) -> dict:
@@ -381,7 +432,9 @@ def list_conversations(db, query: str = "") -> list[dict]:
     if query:
         like = f"%{query}%"
         statement = statement.where(or_(Conversation.title.like(like), Conversation.preview.like(like)))
-    return [serialize_conversation(row) for row in db.scalars(statement.limit(200)).all()]
+    rows = db.scalars(statement.limit(200)).all()
+    group_members, rooms_of = membership_index(db)
+    return [serialize_conversation(row, group_members, rooms_of) for row in rows]
 
 
 def usage_summary(db) -> dict:
@@ -712,15 +765,16 @@ def public_settings(db) -> dict:
 
 
 def room_members(db, group: Conversation) -> list[Conversation]:
-    """按拉进群时的顺序返回成员。没记顺序时按创建顺序。"""
-    rows = db.scalars(select(Conversation).where(Conversation.room_id == group.id)).all()
-    by_id = {row.id: row for row in rows}
+    """按拉进群时的顺序返回成员。同一个会话可以同时在多个群里。"""
+    ids = _member_id_list(group)
+    by_id: dict[int, Conversation] = {}
+    if ids:
+        for row in db.scalars(select(Conversation).where(Conversation.id.in_(ids))).all():
+            by_id[row.id] = row
+    for row in db.scalars(select(Conversation).where(Conversation.room_id == group.id)).all():
+        by_id.setdefault(row.id, row)
     ordered = []
-    for item in (group.room_state or {}).get("member_ids") or []:
-        try:
-            key = int(item)
-        except (TypeError, ValueError):
-            continue
+    for key in ids:
         row = by_id.pop(key, None)
         if row is not None:
             ordered.append(row)
@@ -878,6 +932,34 @@ def _discard_files(conversation_id: int, workspace: str | None) -> None:
         logger.warning("清理会话撤销副本失败：%s", conversation_id, exc_info=True)
 
 
+def _groups_containing(db, conversation_id: int, except_id: int | None = None) -> list[Conversation]:
+    found = []
+    statement = select(Conversation).where(Conversation.kind == "group")
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(Conversation.user_id == uid)
+    for group in db.scalars(statement).all():
+        if group.id == except_id:
+            continue
+        if conversation_id in _member_id_list(group):
+            found.append(group)
+    return found
+
+
+def _forget_member(db, conversation_id: int) -> None:
+    statement = select(Conversation).where(Conversation.kind == "group")
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(Conversation.user_id == uid)
+    for group in db.scalars(statement).all():
+        ids = _member_id_list(group)
+        if conversation_id not in ids:
+            continue
+        state = dict(group.room_state or {})
+        state["member_ids"] = [item for item in ids if item != conversation_id]
+        group.room_state = state
+
+
 def delete_conversation(db, conversation: Conversation) -> list[int]:
     rows = [conversation]
     release = []
@@ -887,6 +969,8 @@ def delete_conversation(db, conversation: Conversation) -> list[int]:
                 rows.append(row)
             else:
                 release.append(row)
+    else:
+        _forget_member(db, conversation.id)
     removed = [(row.id, row.workspace) for row in rows]
     removed_ids = [row.id for row in rows]
     for row in rows:
@@ -897,6 +981,10 @@ def delete_conversation(db, conversation: Conversation) -> list[int]:
         db.query(Schedule).filter(Schedule.conversation_id == conversation_id).delete()
         db.delete(row)
     for row in release:
+        others = _groups_containing(db, row.id, except_id=conversation.id)
+        if others:
+            row.room_id = others[0].id
+            continue
         name = row.member_name or ""
         row.room_id = None
         row.member_name = ""
@@ -933,9 +1021,11 @@ def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: 
         uid = current_user_id()
         if row is None or (uid and row.user_id != uid):
             raise ValueError("有会话不存在")
-        if (row.kind or "") == "group" or row.room_id or (row.kind or "") == "member":
+        if (row.kind or "") == "group":
+            raise ValueError("群聊不能再拉进另一个群")
+        if (row.kind or "") == "member":
             raise ValueError(f"{row.title or '这个会话'} 已经在群里")
-        name = (row.title or "").strip()[:64]
+        name = ((row.member_name or "").strip() or (row.title or "").strip())[:64]
         if not name or name in {"user", "用户"}:
             raise ValueError("会话名字不能作为群成员")
         chosen.append((row, name))
@@ -967,10 +1057,12 @@ def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: 
     db.add(group)
     db.flush()
     for row, name in chosen:
-        row.room_id = group.id
-        row.member_name = name
+        if not row.room_id:
+            row.room_id = group.id
+        if not (row.member_name or "").strip():
+            row.member_name = name
         if not (row.member_prompt or "").strip():
-            row.member_prompt = _linked_prompt(name)
+            row.member_prompt = _linked_prompt(row.member_name or name)
     group.updated_at = datetime.now() + timedelta(seconds=2)
     db.commit()
     return group
@@ -1058,12 +1150,18 @@ def create_group(
 
 
 def private_threads(db, conversation: Conversation) -> list[dict]:
-    if not conversation.room_id or not conversation.member_name or (conversation.kind or "") == "group":
+    if not conversation.member_name or (conversation.kind or "") == "group":
+        return []
+    _, rooms_of = membership_index(db)
+    room_ids = list(rooms_of.get(conversation.id) or [])
+    if conversation.room_id and conversation.room_id not in room_ids:
+        room_ids.append(conversation.room_id)
+    if not room_ids:
         return []
     rows = db.scalars(
         select(Message)
         .where(
-            Message.conversation_id == conversation.room_id,
+            Message.conversation_id.in_(room_ids),
             Message.channel == "private",
             or_(Message.speaker == conversation.member_name, Message.counterpart == conversation.member_name),
         )

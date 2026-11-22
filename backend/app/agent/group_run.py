@@ -259,7 +259,14 @@ async def run_group_turn(db, conversation, content: str, emit, token: str, speak
             return
         _remember_room(conversation, room)
         db.commit()
-        await emit({"type": "token", "text": spoken, "speaker": published.source})
+        await emit(
+            {
+                "type": "token",
+                "text": spoken,
+                "speaker": published.source,
+                "handoff_target": target,
+            }
+        )
         if nxt == published.source and target == published.source:
             break
     _remember_room(conversation, room)

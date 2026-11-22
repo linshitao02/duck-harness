@@ -26,9 +26,7 @@ const targets = computed(() => {
   const active = chat.active;
   if (!active) return [];
   const roomId = active.kind === "group" ? active.id : active.room_id;
-  if (!roomId) return [];
-  return chat.conversations
-    .filter((item) => item.room_id === roomId)
+  return chat.membersOf(roomId)
     .map((item) => ({ item, name: (item.member_name || item.title || "").trim() }))
     .filter((item) => item.name)
     .sort((a, b) => b.name.length - a.name.length);

@@ -80,8 +80,7 @@ const roomMembers = computed(() => {
   const active = chat.active;
   if (!active) return [];
   const roomId = active.kind === "group" ? active.id : active.room_id;
-  if (!roomId) return [];
-  return chat.conversations.filter((item) => item.room_id === roomId);
+  return chat.membersOf(roomId);
 });
 
 const suggestions = computed(() => {

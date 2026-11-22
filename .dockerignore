@@ -5,6 +5,9 @@
 **/.mypy_cache
 **/*.pyc
 data
+**/*.sqlite
+**/*.sqlite3
+**/secret.key
 frontend/dist
 backend/.env
 docker/.env

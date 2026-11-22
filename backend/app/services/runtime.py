@@ -176,6 +176,8 @@ def ensure_user_settings(db, user: User) -> dict[str, str]:
     if current:
         for key, value in defaults.items():
             if key not in current:
+                if key == "workspace":
+                    value = private_workspace(user.id)
                 db.add(UserSetting(user_id=user.id, name=key, value=_stored_value(key, value)))
                 current[key] = value
                 changed = True
@@ -185,11 +187,13 @@ def ensure_user_settings(db, user: User) -> dict[str, str]:
     others = db.scalar(select(func.count()).select_from(UserSetting)) or 0
     if others == 0:
         for row in db.scalars(select(Setting)).all():
-            if row.value and (row.name in defaults or row.name in SECRET_KEYS):
+            if row.name == "workspace" or not row.value:
+                continue
+            if row.name in defaults or row.name in SECRET_KEYS:
                 defaults[row.name] = reveal(row.value) if row.name in SECRET_KEYS else row.value
     else:
-        defaults["workspace"] = private_workspace(user.id)
         defaults["user_name"] = user.name or user.username or "用户"
+    defaults["workspace"] = private_workspace(user.id)
     for key, value in defaults.items():
         db.add(UserSetting(user_id=user.id, name=key, value=_stored_value(key, value)))
     db.commit()

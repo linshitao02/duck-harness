@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .config import ROOT_DIR, UPLOAD_DIR
+from .config import UPLOAD_DIR, sqlite_file
 
 _actor: ContextVar[int | None] = ContextVar("harness_actor", default=None)
 _protected: ContextVar[tuple[str, ...]] = ContextVar("harness_protected", default=())
@@ -41,7 +41,9 @@ def clear_actor() -> None:
 
 def accounts_root() -> Path:
     raw = os.environ.get("HARNESS_ACCOUNTS_DIR", "").strip()
-    return Path(raw) if raw else (ROOT_DIR / "data" / "workspaces")
+    if raw:
+        return Path(raw)
+    return sqlite_file().parent / "workspaces"
 
 
 def private_workspace(user_id: int) -> str:

@@ -65,7 +65,7 @@
 
 ## 快速开始
 
-需要 Python 3.11+ 和 Node.js。数据库用 Python 自带的 SQLite，启动时自动建表，文件在 `data/harness.sqlite`。
+需要 Python 3.11+ 和 Node.js。数据库用 Python 自带的 SQLite，启动时自动建表，文件在 `data/harness.sqlite`。这份数据库、`data/workspaces/` 里的账号目录、`data/uploads/` 里的会话附件和 `data/secret.key` 都不进仓库。服务器拿到代码后是空库，注册时按用户编号重新生成工作区。
 
 ```bat
 cd backend
@@ -97,7 +97,7 @@ Ubuntu 服务器用 Docker 部署，步骤在 `docker/README.md`。服务器上�
 | `HARNESS_SECRET_KEY` | 可选。用来加密设置里的密钥。留空时自动写到 `data/secret.key` |
 | `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `OLLAMA_BASE_URL` | 默认 `http://127.0.0.1:11434` |
-| `HARNESS_WORKSPACE` | 新会话的默认工作区。留空时用本仓库目录 |
+| `HARNESS_WORKSPACE` | 还没有账号时的兜底目录。登录后每个账号使用 `data/workspaces/用户编号` |
 
 服务启动时会自己建表，并补上后来增加的字段。`AUTO_SEED=true` 时，第一次打开会放进一组示例会话。
 

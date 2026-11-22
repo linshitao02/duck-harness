@@ -6,7 +6,13 @@ __pycache__/
 *.pyc
 .env
 docker/.env
+# 本机数据库、账号目录、会话上传和密钥。服务器上按规则重新生成。
 data/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+secret.key
 frontend/dist/
 desktop/node_modules/
 *.log

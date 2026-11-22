@@ -15,14 +15,16 @@ os.environ["HARNESS_SQLITE_PATH"] = str(TEST_SQLITE / "fallback.sqlite")
 os.environ["AUTO_SEED"] = "false"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["DEEPSEEK_API_KEY"] = "test-key"
+os.environ["HARNESS_SECRET_KEY"] = "test-secret-key"
 os.environ["DEEPSEEK_BASE_URL"] = "https://api.deepseek.com"
 os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:11434"
 os.environ["HARNESS_WORKSPACE"] = str(TEST_WORKSPACE)
 os.environ["HARNESS_UPLOAD_DIR"] = str(TEST_UPLOADS)
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
+from app.access import clear_actor
 from app.agent.loop import turn_tokens
 from app.agent.mcp_bridge import clear_snapshot
 from app.agent.providers import hub
@@ -32,8 +34,19 @@ from app.config import reset_settings_cache
 
 reset_settings_cache()
 
+from app.auth import hash_password
 from app.db import Base, database_info, get_engine, init_db, open_session
-from app.services.runtime import ensure_defaults
+from app.models import Conversation, McpServer, Memory, Schedule, Skill, Task, UsageEvent, User
+from app.services.runtime import ensure_defaults, ensure_user_settings
+
+
+def _assign_test_owner(_mapper, _connection, target):
+    if getattr(target, "user_id", None) is None:
+        target.user_id = 1
+
+
+for _model in (Conversation, Memory, Task, Schedule, UsageEvent, Skill, McpServer):
+    event.listen(_model, "before_insert", _assign_test_owner)
 
 
 @pytest.fixture(autouse=True)
@@ -47,9 +60,16 @@ def clean_database():
             conn.execute(table.delete())
         if engine.dialect.name == "mysql":
             conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
+    clear_actor()
     db = open_session()
     try:
         ensure_defaults(db)
+        user = db.get(User, 1)
+        user.username = "tester"
+        user.password_hash = hash_password("tester-pass")
+        user.name = "用户"
+        db.commit()
+        ensure_user_settings(db, user)
     finally:
         db.close()
     hub.override = None
@@ -83,6 +103,11 @@ def client():
     from app.main import app
 
     with TestClient(app) as test_client:
+        logged = test_client.post(
+            "/api/auth/login",
+            json={"username": "tester", "password": "tester-pass"},
+        )
+        assert logged.status_code == 200, logged.text
         yield test_client
 
 

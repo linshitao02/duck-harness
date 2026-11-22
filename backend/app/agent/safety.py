@@ -30,6 +30,7 @@ def sensitive_reason(path: Path) -> str | None:
 
 
 def blocked_command(command: str) -> str | None:
+    from ..access import command_touches_foreign
     from .pwshsec import command_block_reason
 
-    return command_block_reason(command)
+    return command_block_reason(command) or command_touches_foreign(command)

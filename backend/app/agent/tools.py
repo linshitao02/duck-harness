@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from ..config import UPLOAD_DIR
-from ..models import Attachment, McpServer, Schedule, Skill, Task
+from ..models import Attachment, Conversation, McpServer, Schedule, Skill, Task
 from . import mcp_client
 from .edits import apply_once, change_snippet, remember_read, require_fresh_read, resolve_edit, unchanged_read
 from .safety import blocked_command, sensitive_reason
@@ -164,6 +164,10 @@ def resolve_path(workspace: Path, raw: str) -> Path:
 
 
 def guard_path(path: Path) -> str | None:
+    from ..access import path_is_foreign
+
+    if path_is_foreign(path):
+        return "拒绝访问其他用户的目录"
     return sensitive_reason(path)
 
 
@@ -974,7 +978,12 @@ async def _task_write(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(False, "status 只能是 pending、in_progress、done、cancelled")
     if task_id:
         row = ctx.db.get(Task, int(task_id))
+        from ..access import current_user_id
+
+        actor = current_user_id()
         if row is None or (ctx.conversation_id is not None and row.conversation_id != ctx.conversation_id):
+            return ToolResult(False, "任务不存在")
+        if actor and row.user_id not in {None, actor}:
             return ToolResult(False, "任务不存在")
         if title:
             row.title = title
@@ -985,11 +994,16 @@ async def _task_write(args: dict, ctx: ToolContext) -> ToolResult:
     else:
         if not title:
             return ToolResult(False, "新建任务需要 title")
+        owner = None
+        if ctx.conversation_id:
+            conversation = ctx.db.get(Conversation, ctx.conversation_id)
+            owner = conversation.user_id if conversation is not None else None
         row = Task(
             conversation_id=ctx.conversation_id,
             title=title,
             detail=str(args.get("detail") or ""),
             status=status,
+            user_id=owner,
         )
         ctx.db.add(row)
     ctx.db.commit()
@@ -997,6 +1011,8 @@ async def _task_write(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def _list_tasks(args: dict, ctx: ToolContext) -> ToolResult:
+    from ..access import current_user_id
+
     statement = select(Task).order_by(Task.id.desc()).limit(40)
     if ctx.conversation_id:
         statement = (
@@ -1004,6 +1020,9 @@ async def _list_tasks(args: dict, ctx: ToolContext) -> ToolResult:
             .where(Task.conversation_id == ctx.conversation_id)
             .order_by(Task.id.asc())
         )
+    actor = current_user_id()
+    if actor:
+        statement = statement.where(Task.user_id == actor)
     rows = ctx.db.scalars(statement).all()
     if not rows:
         return ToolResult(True, "没有任务")
@@ -1061,7 +1080,13 @@ def load_skills(db, workspace: Path | None = None) -> list[dict]:
                 continue
             for path in sorted(root.rglob("*.md")):
                 _absorb_skill(found, path, "workspace")
-    for row in db.scalars(select(Skill).where(Skill.enabled.is_(True))).all():
+    skill_query = select(Skill).where(Skill.enabled.is_(True))
+    from ..access import current_user_id
+
+    actor = current_user_id()
+    if actor:
+        skill_query = skill_query.where(Skill.user_id == actor)
+    for row in db.scalars(skill_query).all():
         found[row.name] = {
             "name": row.name,
             "description": row.description,
@@ -1216,12 +1241,17 @@ async def _schedule_task(args: dict, ctx: ToolContext) -> ToolResult:
             next_run = datetime.fromisoformat(str(run_at))
         except ValueError:
             return ToolResult(False, "run_at 需要 ISO 时间，例如 2026-11-17T10:00:00")
+    owner = None
+    if ctx.conversation_id:
+        conversation = ctx.db.get(Conversation, ctx.conversation_id)
+        owner = conversation.user_id if conversation is not None else None
     row = Schedule(
         conversation_id=ctx.conversation_id,
         prompt=prompt,
         every_seconds=max(every, 0),
         next_run=next_run,
         enabled=True,
+        user_id=owner,
     )
     ctx.db.add(row)
     ctx.db.commit()
@@ -1251,7 +1281,13 @@ async def _open_path(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def _servers(db):
-    return db.scalars(select(McpServer).where(McpServer.enabled.is_(True)).order_by(McpServer.id)).all()
+    from ..access import current_user_id
+
+    statement = select(McpServer).where(McpServer.enabled.is_(True)).order_by(McpServer.id)
+    actor = current_user_id()
+    if actor:
+        statement = statement.where(McpServer.user_id == actor)
+    return db.scalars(statement).all()
 
 
 async def _list_mcp_tools(args: dict, ctx: ToolContext) -> ToolResult:
@@ -1750,9 +1786,11 @@ class ApprovalBroker:
     async def request(self, payload: dict) -> bool:
         import uuid
 
+        from ..access import current_user_id
+
         approval_id = uuid.uuid4().hex
         event = asyncio.Event()
-        self.pending[approval_id] = {"event": event, "approved": False, **payload}
+        self.pending[approval_id] = {"event": event, "approved": False, "user_id": current_user_id(), **payload}
         emit = payload.get("emit")
         if emit:
             await emit(
@@ -1773,8 +1811,14 @@ class ApprovalBroker:
         return bool(item.get("approved"))
 
     def resolve(self, approval_id: str, approved: bool, answers: dict | None = None) -> bool:
+        from ..access import current_user_id
+
         item = self.pending.get(approval_id)
         if not item:
+            return False
+        owner = item.get("user_id")
+        actor = current_user_id()
+        if owner and actor and owner != actor:
             return False
         item["approved"] = approved
         item["answers"] = answers
@@ -1782,9 +1826,17 @@ class ApprovalBroker:
         return True
 
     async def ask(self, payload: dict) -> dict | None:
+        from ..access import current_user_id
+
         approval_id = uuid.uuid4().hex
         event = asyncio.Event()
-        self.pending[approval_id] = {"event": event, "approved": False, "answers": None, **payload}
+        self.pending[approval_id] = {
+            "event": event,
+            "approved": False,
+            "answers": None,
+            "user_id": current_user_id(),
+            **payload,
+        }
         emit = payload.get("emit")
         if emit:
             await emit(

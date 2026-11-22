@@ -37,18 +37,27 @@ class Snapshot:
     prompt: str = "（没有接入 MCP 服务）"
 
 
-_snapshot = Snapshot(at=0, key="")
+_snapshots: dict[int, Snapshot] = {}
+
+
+def _bucket() -> int:
+    from ..access import current_user_id
+
+    return current_user_id() or 0
+
+
+def _current() -> Snapshot:
+    return _snapshots.get(_bucket()) or Snapshot(at=0, key="")
 
 
 def clear_snapshot() -> None:
-    global _snapshot
-    _snapshot = Snapshot(at=0, key="")
+    _snapshots.clear()
     mcp_client.discard_sessions()
 
 
 def status_payload() -> dict:
     servers = []
-    for state in _snapshot.servers.values():
+    for state in _current().servers.values():
         servers.append(
             {
                 "name": state.name,
@@ -70,15 +79,15 @@ def public_tool_name(server: str, raw: str) -> str:
 
 
 def prompt_text() -> str:
-    return _snapshot.prompt or "（没有接入 MCP 服务）"
+    return _current().prompt or "（没有接入 MCP 服务）"
 
 
 def bridged_tools() -> list:
-    return list(_snapshot.tools)
+    return list(_current().tools)
 
 
 def find_tool(name: str):
-    return _snapshot.by_name.get(name)
+    return _current().by_name.get(name)
 
 
 def visible_bridged(allowed: list[str] | None) -> list:
@@ -249,12 +258,13 @@ def _prompt(rows: list[tuple], errors: list[str]) -> str:
 
 
 async def refresh(db, force: bool = False) -> None:
-    global _snapshot
     from .tools import _servers
 
+    bucket = _bucket()
+    current = _snapshots.get(bucket) or Snapshot(at=0, key="")
     rows = list(await _servers(db))
     key = _server_key(rows)
-    if not force and _snapshot.key == key and time.time() - _snapshot.at < CACHE_SECONDS:
+    if not force and current.key == key and time.time() - current.at < CACHE_SECONDS:
         return
     import asyncio
 
@@ -262,7 +272,7 @@ async def refresh(db, force: bool = False) -> None:
     errors = []
     sections = []
     states: dict[int, ServerTools] = {}
-    previous = _snapshot.servers
+    previous = current.servers
     for row in rows:
         config_key = _config_key(row)
         try:
@@ -299,7 +309,7 @@ async def refresh(db, force: bool = False) -> None:
         (server, instructions, [tool for tool in tools if tool.name in kept])
         for server, instructions, tools in sections
     ]
-    _snapshot = Snapshot(
+    _snapshots[bucket] = Snapshot(
         at=time.time(),
         key=key,
         tools=unique,

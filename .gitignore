@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 *.pyc
 .env
+docker/.env
 data/
 frontend/dist/
 desktop/node_modules/

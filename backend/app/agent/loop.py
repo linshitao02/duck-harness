@@ -1028,6 +1028,7 @@ async def run_turn(db, conversation, content: str, attachment_ids: list[int], em
         db.add(
             UsageEvent(
                 conversation_id=conversation.id,
+                user_id=conversation.user_id,
                 provider=conversation.provider,
                 model=active_model,
                 prompt_tokens=total_prompt,

@@ -8,6 +8,8 @@ from pathlib import Path
 import httpx
 from sqlalchemy import func, or_, select, text
 
+from ..access import current_user_id, owner_kwargs, private_workspace, reset_actor, set_actor
+from ..vault import reveal, seal, sealed
 from ..config import ROOT_DIR, UPLOAD_DIR, get_settings
 from ..agent.history import discard_journal, sweep_history
 from ..agent.diffutil import split_embedded_diff
@@ -22,6 +24,7 @@ from ..models import (
     Task,
     UsageEvent,
     User,
+    UserSetting,
 )
 from .cost import estimate_cost
 from .seed import seed_if_empty
@@ -78,18 +81,42 @@ def default_map() -> dict[str, str]:
     }
 
 
+def _plain_settings(rows) -> tuple[dict[str, str], bool]:
+    current: dict[str, str] = {}
+    changed = False
+    for row in rows:
+        if row.name in SECRET_KEYS:
+            plain = reveal(row.value)
+            if row.value and not sealed(row.value):
+                row.value = seal(plain)
+                changed = True
+            current[row.name] = plain
+        else:
+            current[row.name] = row.value
+    return current, changed
+
+
+def _stored_value(key: str, value: str) -> str:
+    return seal(value) if key in SECRET_KEYS else value
+
+
 def ensure_defaults(db) -> dict[str, str]:
-    if db.get(User, 1) is None:
-        db.add(User(id=1, name="用户"))
-    current = {row.name: row.value for row in db.scalars(select(Setting)).all()}
+    user = db.get(User, 1)
+    if user is None:
+        user = User(id=1, name="用户")
+        db.add(user)
+    rows = db.scalars(select(Setting)).all()
+    current, changed = _plain_settings(rows)
     for key, value in default_map().items():
         if key not in current:
-            db.add(Setting(name=key, value=value))
+            db.add(Setting(name=key, value=_stored_value(key, value)))
             current[key] = value
-    user = db.get(User, 1)
+            changed = True
     if user and current.get("user_name") and user.name != current["user_name"]:
         user.name = current["user_name"]
-    db.commit()
+        changed = True
+    if changed:
+        db.commit()
     repair_workspaces(db, current)
     return current
 
@@ -134,15 +161,56 @@ def repair_workspaces(db, current: dict[str, str] | None = None) -> str:
 
 
 def all_settings(db) -> dict[str, str]:
+    uid = current_user_id()
+    if uid:
+        user = db.get(User, uid)
+        if user is not None:
+            return ensure_user_settings(db, user)
     return ensure_defaults(db)
 
 
-def _write_setting(db, current: dict, key: str, value: str) -> None:
-    row = db.get(Setting, key)
-    if row is None:
-        db.add(Setting(name=key, value=value))
+def ensure_user_settings(db, user: User) -> dict[str, str]:
+    rows = db.scalars(select(UserSetting).where(UserSetting.user_id == user.id)).all()
+    current, changed = _plain_settings(rows)
+    defaults = default_map()
+    if current:
+        for key, value in defaults.items():
+            if key not in current:
+                db.add(UserSetting(user_id=user.id, name=key, value=_stored_value(key, value)))
+                current[key] = value
+                changed = True
+        if changed:
+            db.commit()
+        return current
+    others = db.scalar(select(func.count()).select_from(UserSetting)) or 0
+    if others == 0:
+        for row in db.scalars(select(Setting)).all():
+            if row.value and (row.name in defaults or row.name in SECRET_KEYS):
+                defaults[row.name] = reveal(row.value) if row.name in SECRET_KEYS else row.value
     else:
-        row.value = value
+        defaults["workspace"] = private_workspace(user.id)
+        defaults["user_name"] = user.name or user.username or "用户"
+    for key, value in defaults.items():
+        db.add(UserSetting(user_id=user.id, name=key, value=_stored_value(key, value)))
+    db.commit()
+    return defaults
+
+
+def _write_setting(db, current: dict, key: str, value: str) -> None:
+    stored = _stored_value(key, value)
+    uid = current_user_id()
+    if uid:
+        row = db.get(UserSetting, (uid, key))
+        if row is None:
+            db.add(UserSetting(user_id=uid, name=key, value=stored))
+        else:
+            row.value = stored
+    else:
+        row = db.get(Setting, key)
+        if row is None:
+            db.add(Setting(name=key, value=stored))
+        else:
+            row.value = stored
     current[key] = value
 
 
@@ -201,9 +269,10 @@ def set_settings(db, values: dict) -> dict[str, str]:
             continue
         _write_setting(db, current, key, cleaned)
     if "user_name" in values:
-        user = db.get(User, 1)
+        uid = current_user_id()
+        user = db.get(User, uid) if uid else db.get(User, 1)
         if user:
-            user.name = str(values["user_name"])
+            user.name = str(values["user_name"])[:64]
     db.commit()
     return {key: value for key, value in current.items() if key not in SECRET_KEYS}
 
@@ -302,6 +371,9 @@ def list_conversations(db, query: str = "") -> list[dict]:
     statement = select(Conversation).order_by(
         Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc()
     )
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(Conversation.user_id == uid)
     if query:
         like = f"%{query}%"
         statement = statement.where(or_(Conversation.title.like(like), Conversation.preview.like(like)))
@@ -309,14 +381,19 @@ def list_conversations(db, query: str = "") -> list[dict]:
 
 
 def usage_summary(db) -> dict:
-    prompt, completion = db.execute(
-        select(func.coalesce(func.sum(UsageEvent.prompt_tokens), 0), func.coalesce(func.sum(UsageEvent.completion_tokens), 0))
-    ).one()
-    rows = db.execute(
-        select(UsageEvent.model, func.sum(UsageEvent.prompt_tokens), func.sum(UsageEvent.completion_tokens)).group_by(
-            UsageEvent.model
-        )
-    ).all()
+    total = select(
+        func.coalesce(func.sum(UsageEvent.prompt_tokens), 0),
+        func.coalesce(func.sum(UsageEvent.completion_tokens), 0),
+    )
+    grouped = select(
+        UsageEvent.model, func.sum(UsageEvent.prompt_tokens), func.sum(UsageEvent.completion_tokens)
+    ).group_by(UsageEvent.model)
+    uid = current_user_id()
+    if uid:
+        total = total.where(UsageEvent.user_id == uid)
+        grouped = grouped.where(UsageEvent.user_id == uid)
+    prompt, completion = db.execute(total).one()
+    rows = db.execute(grouped).all()
     by_model = []
     total_cost = 0.0
     for model, pin, pout in rows:
@@ -535,7 +612,6 @@ async def scheduler_loop() -> None:
 
 async def run_due_schedules() -> int:
     from ..agent.loop import run_turn
-    from ..agent.providers import hub
     from ..db import open_session
 
     db = open_session()
@@ -568,11 +644,19 @@ async def run_due_schedules() -> int:
             async def ignore(_event):
                 return None
 
+            from ..access import protected_for
             from ..agent.loop import turn_tokens
 
             token = f"schedule-{conversation_id}-{int(now.timestamp())}-{started}"
             turn_tokens[conversation.id] = token
-            await run_turn(db, conversation, prompt, [], ignore, token)
+            actor = set_actor(
+                conversation.user_id,
+                protected_for(db, conversation.user_id) if conversation.user_id else (),
+            )
+            try:
+                await run_turn(db, conversation, prompt, [], ignore, token)
+            finally:
+                reset_actor(actor)
             started += 1
         return started
     finally:
@@ -592,12 +676,17 @@ def startup() -> None:
 
 def public_settings(db) -> dict:
     stored = all_settings(db)
-    user = db.get(User, 1)
+    uid = current_user_id()
+    user = db.get(User, uid) if uid else db.get(User, 1)
     _base, key, source = deepseek_credentials(db)
     visible = {name: value for name, value in stored.items() if name not in SECRET_KEYS}
     return {
         "values": visible,
-        "user": {"name": user.name if user else stored.get("user_name", "用户")},
+        "user": {
+            "id": user.id if user else None,
+            "name": user.name if user else stored.get("user_name", "用户"),
+            "username": (user.username or "") if user else "",
+        },
         "deepseek_configured": bool(key),
         "deepseek_key_source": source,
         "providers": ["deepseek", "ollama"],
@@ -633,14 +722,30 @@ def _inside_dir(path: Path, root: Path) -> bool:
     return True
 
 
+def _upload_dirs(conversation_id: int) -> list[Path]:
+    root = UPLOAD_DIR.resolve()
+    found = []
+    if not root.is_dir():
+        return found
+    legacy = root / str(int(conversation_id))
+    if legacy.is_dir() and not legacy.is_symlink() and _inside_dir(legacy, root):
+        found.append(legacy)
+    for child in root.iterdir():
+        if not child.is_dir() or child.is_symlink() or not (child.name.startswith("u") and child.name[1:].isdigit()):
+            continue
+        nested = child / str(int(conversation_id))
+        if nested.is_dir() and not nested.is_symlink() and _inside_dir(nested, root):
+            found.append(nested)
+    return found
+
+
 def discard_uploads(conversation_id: int) -> bool:
     """删掉这条会话上传和生成的附件目录。"""
-    root = UPLOAD_DIR.resolve()
-    folder = root / str(int(conversation_id))
-    if not folder.is_dir() or folder.is_symlink() or not _inside_dir(folder, root):
-        return False
-    shutil.rmtree(folder)
-    return True
+    removed = False
+    for folder in _upload_dirs(conversation_id):
+        shutil.rmtree(folder)
+        removed = True
+    return removed
 
 
 def _known_workspaces(db) -> list[Path]:
@@ -674,26 +779,30 @@ def _sweep_loose_uploads(db, live: set[int]) -> int:
         except OSError:
             continue
     removed = 0
-    root = UPLOAD_DIR.resolve()
     for conversation_id in live:
-        folder = root / str(int(conversation_id))
-        if not folder.is_dir() or folder.is_symlink() or not _inside_dir(folder, root):
+        for folder in _upload_dirs(conversation_id):
+            _removed_here = _sweep_folder(folder, referenced)
+            removed += _removed_here
+    return removed
+
+
+def _sweep_folder(folder: Path, referenced: set[str]) -> int:
+    removed = 0
+    for child in list(folder.iterdir()):
+        if not child.is_file() or child.is_symlink() or not _inside_dir(child, folder):
             continue
-        for child in list(folder.iterdir()):
-            if not child.is_file() or child.is_symlink() or not _inside_dir(child, folder):
-                continue
-            try:
-                if str(child.resolve()) in referenced:
-                    continue
-                child.unlink()
-                removed += 1
-            except OSError:
-                logger.warning("清理落单附件失败：%s", child.name, exc_info=True)
         try:
-            if folder.is_dir() and not any(folder.iterdir()):
-                folder.rmdir()
+            if str(child.resolve()) in referenced:
+                continue
+            child.unlink()
+            removed += 1
         except OSError:
-            pass
+            logger.warning("清理落单附件失败：%s", child.name, exc_info=True)
+    try:
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    except OSError:
+        pass
     return removed
 
 
@@ -701,17 +810,23 @@ def sweep_orphaned_conversation_files(db) -> None:
     """清掉已经没有会话的上传目录和撤销副本。"""
     live = set(db.scalars(select(Conversation.id)))
     removed_uploads = 0
+    seen: set[int] = set()
     if UPLOAD_DIR.is_dir() and not UPLOAD_DIR.is_symlink():
         for child in list(UPLOAD_DIR.iterdir()):
-            if not child.is_dir() or child.is_symlink() or not child.name.isdigit():
+            if not child.is_dir() or child.is_symlink():
                 continue
-            if int(child.name) in live:
-                continue
+            if child.name.isdigit():
+                seen.add(int(child.name))
+            elif child.name.startswith("u") and child.name[1:].isdigit():
+                for nested in child.iterdir():
+                    if nested.is_dir() and nested.name.isdigit():
+                        seen.add(int(nested.name))
+        for conversation_id in seen - live:
             try:
-                if discard_uploads(int(child.name)):
+                if discard_uploads(conversation_id):
                     removed_uploads += 1
             except OSError:
-                logger.warning("清理上传目录失败：%s", child.name, exc_info=True)
+                logger.warning("清理上传目录失败：%s", conversation_id, exc_info=True)
     removed_loose = 0
     try:
         removed_loose = _sweep_loose_uploads(db, live)
@@ -795,7 +910,8 @@ def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: 
             raise ValueError("同一个会话不能加两次")
         seen.add(key)
         row = db.get(Conversation, key)
-        if row is None:
+        uid = current_user_id()
+        if row is None or (uid and row.user_id != uid):
             raise ValueError("有会话不存在")
         if (row.kind or "") == "group" or row.room_id or (row.kind or "") == "member":
             raise ValueError(f"{row.title or '这个会话'} 已经在群里")
@@ -820,6 +936,7 @@ def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: 
         icon_key=_group_mark(icon_key, icon_color)[0],
         icon_color=_group_mark(icon_key, icon_color)[1],
         kind="group",
+        **owner_kwargs(),
         room_state={
             "current_speaker": names[0],
             "current_turn": 0,
@@ -877,6 +994,7 @@ def create_group(
         icon_key=mark,
         icon_color=tint,
         kind="group",
+        **owner_kwargs(),
         room_state={"current_speaker": names[0], "current_turn": 0, "max_turns": 6, "member_ids": []},
     )
     db.add(group)
@@ -893,6 +1011,7 @@ def create_group(
             icon_key=(item["icon_key"] or _MEMBER_ICONS[index % len(_MEMBER_ICONS)])[:32],
             icon_color=(item["icon_color"] or _MEMBER_COLORS[index % len(_MEMBER_COLORS)])[:16],
             kind="member",
+            **owner_kwargs(),
             room_id=group.id,
             member_name=item["name"],
             member_prompt=prompt,

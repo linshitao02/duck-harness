@@ -111,6 +111,14 @@ export const useChatStore = defineStore("chat", {
         this.toast = "";
       }, 2400);
     },
+    async logout() {
+      try {
+        await api("/api/auth/logout", { method: "POST", body: "{}" });
+      } catch {
+        // 会话已经失效时，刷新后仍会回到登录。
+      }
+      window.location.reload();
+    },
     async boot() {
       const [settings, conversations, models] = await Promise.all([
         api("/api/settings"),

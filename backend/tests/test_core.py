@@ -24,6 +24,8 @@ from tests.conftest import events_from
 def test_tables_exist():
     expected = {
         "users",
+        "auth_sessions",
+        "user_settings",
         "conversations",
         "messages",
         "attachments",
@@ -165,7 +167,7 @@ def test_readonly_commands_follow_parsed_allowlist():
     assert command_is_readonly("route print")
 
 
-def test_health_settings_and_conversation_crud(client):
+def test_health_settings_and_conversation_crud(client, db):
     health = client.get("/api/health")
     assert health.status_code == 200
     body = health.json()
@@ -204,6 +206,14 @@ def test_health_settings_and_conversation_crud(client):
     assert saved["values"]["permission_mode"] == "plan"
     secret = client.put("/api/settings", json={"deepseek_api_key": "sk-settings-only", "deepseek_base": "https://example.invalid"}).json()
     assert "sk-settings-only" not in str(secret)
+    from sqlalchemy import select
+
+    from app.models import UserSetting
+
+    db.expire_all()
+    stored_key = db.scalar(select(UserSetting.value).where(UserSetting.user_id == 1, UserSetting.name == "deepseek_api_key"))
+    assert stored_key.startswith("enc:v1:")
+    assert "sk-settings-only" not in stored_key
     assert secret["deepseek_configured"] is True
     assert secret["deepseek_key_source"] == "settings"
     assert secret["values"]["deepseek_base"] == "https://example.invalid"

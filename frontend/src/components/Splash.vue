@@ -21,6 +21,8 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
+const emit = defineEmits(["done"]);
+
 // The last half second of the intro whips the head from one side to the other.
 // Hold the frame just before that, instead of playing it or cutting to the idle loop.
 const CALM_AT = 8.42;
@@ -42,6 +44,7 @@ function enter() {
   out.value = true;
   window.setTimeout(() => {
     shown.value = false;
+    emit("done");
   }, 460);
 }
 

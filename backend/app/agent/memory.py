@@ -383,7 +383,13 @@ def import_legacy(db, workspace: Path) -> None:
 
     from ..models import Memory
 
-    rows = db.scalars(select(Memory).order_by(Memory.id.asc())).all()
+    from ..access import current_user_id
+
+    statement = select(Memory).order_by(Memory.id.asc())
+    actor = current_user_id()
+    if actor:
+        statement = statement.where(Memory.user_id == actor)
+    rows = db.scalars(statement).all()
     for row in rows:
         title = (row.title or row.content or "记忆")[:40]
         try:

@@ -11,9 +11,16 @@ async function parseError(response) {
   }
 }
 
+function noteUnauthorized(url, response) {
+  if (response.status === 401 && !String(url).includes("/api/auth/")) {
+    window.dispatchEvent(new CustomEvent("harness-unauthorized"));
+  }
+}
+
 export async function api(url, options = {}) {
   const headers = { ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...(options.headers || {}) };
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { credentials: "same-origin", ...options, headers });
+  noteUnauthorized(url, response);
   if (!response.ok) throw new Error(await parseError(response));
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) return response.json();
@@ -24,9 +31,11 @@ export function streamChat(conversationId, body, onEvent, signal) {
   return fetch(`/api/conversations/${conversationId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify(body),
     signal,
   }).then(async (response) => {
+    if (response.status === 401) window.dispatchEvent(new CustomEvent("harness-unauthorized"));
     if (!response.ok || !response.body) throw new Error(await parseError(response));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

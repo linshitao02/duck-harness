@@ -2,12 +2,15 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
+from .access import protected_for, reset_actor, set_actor
 from .api.routes import router
+from .auth import COOKIE, read_session
 from .config import ROOT_DIR, get_settings
+from .db import open_session
 from .services.runtime import scheduler_loop, startup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -34,8 +37,35 @@ async def lifespan(_app: FastAPI):
             pass
 
 
+PUBLIC_API = {"/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/session", "/api/auth/logout"}
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="duck-harness", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api") or path in PUBLIC_API:
+            return await call_next(request)
+        db = open_session()
+        try:
+            found = read_session(db, request.cookies.get(COOKIE, ""))
+        finally:
+            db.close()
+        if found is None:
+            return JSONResponse({"detail": "请先登录"}, status_code=401)
+        user, _row = found
+        db = open_session()
+        try:
+            protected = protected_for(db, user.id)
+        finally:
+            db.close()
+        tokens = set_actor(user.id, protected)
+        try:
+            return await call_next(request)
+        finally:
+            reset_actor(tokens)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[

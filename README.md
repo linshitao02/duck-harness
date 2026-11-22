@@ -21,7 +21,7 @@
 
 ## 演示
 
-打开网页或桌面时，先播一段开场。点「进入」，或按 Esc，可以直接进界面。
+打开网页或桌面时，先播一段开场。播完进入登录。登录后会记住这次登录，下次打开直接进入，不再播放动画。退出之后才会重新看到开场和登录。
 
 <p align="center">
   <img src="docs/images/splash.jpg" alt="打开时的启动动画" width="920" />
@@ -51,7 +51,9 @@
 
 - **工具循环。** 模型决定下一步，后端在本机执行，结果写回对话，再继续问模型，直到它给出正文，或你停掉这一轮。
 - **群聊。** `@名字` 指定下一个开口的成员。成员可以交接，也可以私聊。每个成员仍是自己的会话。新建群聊时可以另选一组图标和颜色。
-- **启动动画。** 打开网页或桌面时先播开场，播完再进入界面。
+- **启动动画。** 还没登录时，打开网页或桌面先播开场，播完进入登录。
+- **账号。** 注册和登录之后，会话、上传的文件、设置和密钥按用户分开。登录状态会记住，退出才需要重新登录。
+- **密钥。** 写在设置里的 DeepSeek 密钥入库前加密，调用模型时再解密。加密钥匙在本机 `data/secret.key`，也可以用环境变量 `HARNESS_SECRET_KEY`。不要把这把钥匙和数据库备份放在一起交给别人。
 - **开场提问。** 新建的普通会话先问最多两轮选择题。问清楚之后，你把要做的事发过来。
 - **本机操作。** 读改文本、PDF、Word 和 Jupyter，搜索文件，在 PowerShell 里执行命令，也能把长命令放到后台。
 - **联网。** 搜索和抓取网页，再把需要的部分放进上下文。
@@ -76,11 +78,13 @@ cd ..
 启动网页.bat
 ```
 
-浏览器会打开 http://127.0.0.1:8787 。桌面窗口用 `启动桌面.bat`。服务还没起来时，它会自己启动同一个后端。两个入口可以同时开。
+浏览器会打开 http://127.0.0.1:8787 。先播放启动动画，再注册或登录。登录后会记住状态，下次打开直接进入，不再播放动画。桌面窗口用 `启动桌面.bat`。服务还没起来时，它会自己启动同一个后端。两个入口可以同时开。
 
-DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DEEPSEEK_API_KEY`。`.env` 已经在 `.gitignore` 里，不要提交。
+DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DEEPSEEK_API_KEY`。设置里保存的密钥会加密后再入库。`.env` 和 `data/secret.key` 已经在 `.gitignore` 里，不要提交。
 
 本机如果用 Anaconda 的 `agent` 环境，两个启动脚本会优先找这个环境里的 Python。
+
+Ubuntu 服务器用 Docker 部署，步骤在 `docker/README.md`。服务器上不用安装 MySQL。
 
 ## 配置
 
@@ -89,7 +93,8 @@ DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DE
 | 变量 | 作用 |
 | --- | --- |
 | `DATABASE_URL` | 留空即可。数据写在 `data/harness.sqlite` |
-| `DEEPSEEK_API_KEY` | DeepSeek 密钥。留空时可以改在界面里填写 |
+| `DEEPSEEK_API_KEY` | DeepSeek 密钥。留空时可以改在界面里填写。界面里保存的密钥会加密入库 |
+| `HARNESS_SECRET_KEY` | 可选。用来加密设置里的密钥。留空时自动写到 `data/secret.key` |
 | `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 | `OLLAMA_BASE_URL` | 默认 `http://127.0.0.1:11434` |
 | `HARNESS_WORKSPACE` | 新会话的默认工作区。留空时用本仓库目录 |
@@ -103,9 +108,10 @@ DeepSeek 密钥写在界面的设置里，也可以写在 `backend/.env` 的 `DE
 ## 目录
 
 ```text
-backend/     FastAPI、工具循环、群聊、权限和测试
+backend/     FastAPI、工具循环、群聊、登录、权限和测试
 frontend/    Vue 3 + Pinia 界面
 desktop/     pywebview 桌面壳
+docker/      Ubuntu 上的容器部署
 sql/         可选的 MySQL 建库脚本
 docs/        架构说明和界面图
 ```

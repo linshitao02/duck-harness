@@ -2,16 +2,19 @@ import json
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..access import current_user_id, owner_kwargs, workspace_allowed
 from ..agent.group_run import iter_group_events
 from ..agent.intake import answer_intake, close_intake, start_intake
 from ..agent.loop import cancel_turn, iter_events
 from ..agent.providers import OpenAICompatProvider, collect_text, hub
 from ..agent.tools import broker, load_skills
+from ..auth import COOKIE, drop_session, issue_session, login_user, public_user, read_session, register_user
 from ..config import UPLOAD_DIR, get_settings
 from ..db import get_engine, open_session
 from ..models import Attachment, Conversation, McpServer, Message, Skill, Task
@@ -30,6 +33,7 @@ from ..services.runtime import (
     serialize_conversation,
     PERMISSION_MODES,
     canonical_mode,
+    ensure_user_settings,
     set_settings,
     usage_summary,
 )
@@ -44,6 +48,13 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+class AuthIn(BaseModel):
+    username: str
+    password: str
+    name: str = ""
+    remember: bool = False
 
 
 class ConversationIn(BaseModel):
@@ -141,6 +152,29 @@ def sse(payload: dict) -> str:
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
 
+def owned_conversation(db: Session, conversation_id: int) -> Conversation:
+    row = db.get(Conversation, conversation_id)
+    uid = current_user_id()
+    if row is None or (uid and row.user_id != uid):
+        raise HTTPException(404, "会话不存在")
+    return row
+
+
+def _remember_cookie(response: Response, token: str, remember: bool) -> None:
+    response.set_cookie(
+        COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        max_age=60 * 60 * 24 * 30 if remember else None,
+    )
+
+
+def _auth_payload(user, remember: bool) -> dict:
+    return {"authenticated": True, "remember": bool(remember), "user": public_user(user)}
+
+
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     from ..db import database_info
@@ -162,6 +196,45 @@ def health(db: Session = Depends(get_db)):
     except Exception as exc:
         report["error"] = str(exc)
     return report
+
+
+@router.post("/auth/register")
+def register(body: AuthIn, response: Response, db: Session = Depends(get_db)):
+    try:
+        user = register_user(db, body.username, body.password, body.name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    ensure_user_settings(db, user)
+    session = issue_session(db, user, body.remember)
+    _remember_cookie(response, session.token, body.remember)
+    return _auth_payload(user, body.remember)
+
+
+@router.post("/auth/login")
+def login(body: AuthIn, response: Response, db: Session = Depends(get_db)):
+    user = login_user(db, body.username, body.password)
+    if user is None:
+        raise HTTPException(401, "用户名或密码不正确")
+    ensure_user_settings(db, user)
+    session = issue_session(db, user, body.remember)
+    _remember_cookie(response, session.token, body.remember)
+    return _auth_payload(user, body.remember)
+
+
+@router.get("/auth/session")
+def session_status(request: Request, db: Session = Depends(get_db)):
+    found = read_session(db, request.cookies.get(COOKIE, ""))
+    if found is None:
+        return {"authenticated": False, "remember": False, "user": None}
+    user, row = found
+    return _auth_payload(user, row.remember)
+
+
+@router.post("/auth/logout")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    drop_session(db, request.cookies.get(COOKIE, ""))
+    response.delete_cookie(COOKIE, path="/")
+    return {"ok": True}
 
 
 @router.get("/me")
@@ -202,6 +275,7 @@ def create_conversation(body: ConversationIn, db: Session = Depends(get_db)):
         workspace=stored["workspace"],
         icon_key=(body.icon_key or "spark")[:32],
         icon_color=(body.icon_color or "#ff4b8d")[:16],
+        **owner_kwargs(),
     )
     db.add(row)
     db.commit()
@@ -226,10 +300,13 @@ def create_group_chat(body: GroupIn, db: Session = Depends(get_db)):
 
 @router.patch("/conversations/{conversation_id}")
 def patch_conversation(conversation_id: int, body: ConversationPatch, db: Session = Depends(get_db)):
-    row = db.get(Conversation, conversation_id)
-    if row is None:
-        raise HTTPException(404, "会话不存在")
+    row = owned_conversation(db, conversation_id)
     data = body.model_dump(exclude_none=True)
+    if data.get("workspace"):
+        try:
+            data["workspace"] = workspace_allowed(db, row.user_id or current_user_id() or 0, data["workspace"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     if "permission_mode" in data:
         data["permission_mode"] = canonical_mode(data["permission_mode"])
         if data["permission_mode"] not in PERMISSION_MODES:
@@ -247,26 +324,20 @@ def patch_conversation(conversation_id: int, body: ConversationPatch, db: Sessio
 
 @router.delete("/conversations/{conversation_id}")
 def remove_conversation(conversation_id: int, db: Session = Depends(get_db)):
-    row = db.get(Conversation, conversation_id)
-    if row is None:
-        raise HTTPException(404, "会话不存在")
+    row = owned_conversation(db, conversation_id)
     delete_conversation(db, row)
     return {"ok": True}
 
 
 @router.get("/conversations/{conversation_id}/messages")
 def messages(conversation_id: int, db: Session = Depends(get_db)):
-    row = db.get(Conversation, conversation_id)
-    if row is None:
-        raise HTTPException(404, "会话不存在")
+    row = owned_conversation(db, conversation_id)
     return {"items": present_messages(db, conversation_id), "private_threads": private_threads(db, row)}
 
 
 @router.post("/conversations/{conversation_id}/intake")
 async def begin_intake(conversation_id: int, db: Session = Depends(get_db)):
-    row = db.get(Conversation, conversation_id)
-    if row is None:
-        raise HTTPException(404, "会话不存在")
+    row = owned_conversation(db, conversation_id)
     try:
         return await start_intake(db, row)
     except ValueError as exc:
@@ -275,9 +346,7 @@ async def begin_intake(conversation_id: int, db: Session = Depends(get_db)):
 
 @router.post("/conversations/{conversation_id}/intake/answer")
 async def reply_intake(conversation_id: int, body: IntakeAnswerIn, db: Session = Depends(get_db)):
-    row = db.get(Conversation, conversation_id)
-    if row is None:
-        raise HTTPException(404, "会话不存在")
+    row = owned_conversation(db, conversation_id)
     try:
         return await answer_intake(db, row, body.message_id, body.choice, body.text)
     except ValueError as exc:
@@ -288,10 +357,11 @@ async def reply_intake(conversation_id: int, body: IntakeAnswerIn, db: Session =
 async def chat(conversation_id: int, body: ChatIn):
     get_engine()
     db = open_session()
-    conversation = db.get(Conversation, conversation_id)
-    if conversation is None:
+    try:
+        conversation = owned_conversation(db, conversation_id)
+    except HTTPException:
         db.close()
-        raise HTTPException(404, "会话不存在")
+        raise
     if body.provider in {"deepseek", "ollama"}:
         conversation.provider = body.provider
     if body.model:
@@ -320,16 +390,15 @@ async def chat(conversation_id: int, body: ChatIn):
 
 
 @router.post("/conversations/{conversation_id}/cancel")
-def cancel(conversation_id: int):
+def cancel(conversation_id: int, db: Session = Depends(get_db)):
+    owned_conversation(db, conversation_id)
     cancel_turn(conversation_id)
     return {"ok": True}
 
 
 @router.post("/conversations/{conversation_id}/compact")
 async def compact(conversation_id: int, db: Session = Depends(get_db)):
-    conversation = db.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(404, "会话不存在")
+    conversation = owned_conversation(db, conversation_id)
     summary = await compact_conversation(db, conversation, hub)
     return {"summary": summary}
 
@@ -338,9 +407,7 @@ async def compact(conversation_id: int, db: Session = Depends(get_db)):
 def rewind_conversation(conversation_id: int, body: RewindIn, db: Session = Depends(get_db)):
     from ..agent.history import rewind
 
-    conversation = db.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(404, "会话不存在")
+    conversation = owned_conversation(db, conversation_id)
     stored = all_settings(db)
     workspace = Path(conversation.workspace or stored["workspace"])
     restored = rewind(workspace, conversation.id, max(1, min(int(body.batches or 1), 20)))
@@ -354,10 +421,8 @@ def rewind_conversation(conversation_id: int, body: RewindIn, db: Session = Depe
 
 @router.post("/conversations/{conversation_id}/attachments")
 async def upload(conversation_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    conversation = db.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(404, "会话不存在")
-    folder = UPLOAD_DIR / str(conversation_id)
+    conversation = owned_conversation(db, conversation_id)
+    folder = UPLOAD_DIR / f"u{int(conversation.user_id or 0)}" / str(conversation_id)
     folder.mkdir(parents=True, exist_ok=True)
     filename = Path(file.filename or "attachment").name
     target = folder / filename
@@ -378,9 +443,16 @@ async def upload(conversation_id: int, file: UploadFile = File(...), db: Session
 @router.get("/attachments/{attachment_id}")
 def download(attachment_id: int, db: Session = Depends(get_db)):
     row = db.get(Attachment, attachment_id)
-    if row is None or not Path(row.path).exists():
+    if row is None or not row.path or not Path(row.path).is_file():
         raise HTTPException(404, "附件不存在")
-    return FileResponse(row.path, filename=row.filename, media_type=row.mime)
+    owned_conversation(db, row.conversation_id)
+    root = UPLOAD_DIR.resolve()
+    target = Path(row.path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(404, "附件不存在") from None
+    return FileResponse(target, filename=row.filename, media_type=row.mime)
 
 
 @router.post("/approvals/{approval_id}")
@@ -450,7 +522,11 @@ def tasks(conversation_id: int | None = None, db: Session = Depends(get_db)):
     from sqlalchemy import select
 
     statement = select(Task).order_by(Task.id.asc())
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(Task.user_id == uid)
     if conversation_id:
+        owned_conversation(db, conversation_id)
         statement = statement.where(Task.conversation_id == conversation_id)
     rows = db.scalars(statement).all()
     return {
@@ -469,11 +545,14 @@ def tasks(conversation_id: int | None = None, db: Session = Depends(get_db)):
 
 @router.post("/tasks")
 def add_task(body: TaskIn, db: Session = Depends(get_db)):
+    if body.conversation_id:
+        owned_conversation(db, body.conversation_id)
     row = Task(
         conversation_id=body.conversation_id,
         title=body.title,
         detail=body.detail,
         status=body.status,
+        **owner_kwargs(),
     )
     db.add(row)
     db.commit()
@@ -488,9 +567,13 @@ def skills(db: Session = Depends(get_db)):
 
 @router.post("/skills")
 def add_skill(body: SkillIn, db: Session = Depends(get_db)):
-    row = db.query(Skill).filter(Skill.name == body.name).one_or_none()
+    uid = current_user_id()
+    statement = select(Skill).where(Skill.name == body.name)
+    if uid:
+        statement = statement.where(Skill.user_id == uid)
+    row = db.scalars(statement).first()
     if row is None:
-        row = Skill(name=body.name, description=body.description, body=body.body, enabled=True)
+        row = Skill(name=body.name, description=body.description, body=body.body, enabled=True, **owner_kwargs())
         db.add(row)
     else:
         row.description = body.description
@@ -504,7 +587,11 @@ def add_skill(body: SkillIn, db: Session = Depends(get_db)):
 def mcp_list(db: Session = Depends(get_db)):
     from sqlalchemy import select
 
-    rows = db.scalars(select(McpServer).order_by(McpServer.id.asc())).all()
+    statement = select(McpServer).order_by(McpServer.id.asc())
+    uid = current_user_id()
+    if uid:
+        statement = statement.where(McpServer.user_id == uid)
+    rows = db.scalars(statement).all()
     return {
         "items": [
             {
@@ -521,7 +608,7 @@ def mcp_list(db: Session = Depends(get_db)):
 
 @router.post("/mcp")
 def mcp_add(body: McpIn, db: Session = Depends(get_db)):
-    row = McpServer(name=body.name, command=body.command, args=body.args, env=body.env, enabled=True)
+    row = McpServer(name=body.name, command=body.command, args=body.args, env=body.env, enabled=True, **owner_kwargs())
     db.add(row)
     db.commit()
     return {"id": row.id, "name": row.name}
@@ -538,7 +625,8 @@ async def mcp_status(db: Session = Depends(get_db)):
 @router.delete("/mcp/{server_id}")
 def mcp_delete(server_id: int, db: Session = Depends(get_db)):
     row = db.get(McpServer, server_id)
-    if row is None:
+    uid = current_user_id()
+    if row is None or (uid and row.user_id != uid):
         raise HTTPException(404, "没有这个 MCP 服务")
     db.delete(row)
     db.commit()

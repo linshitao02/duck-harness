@@ -56,6 +56,10 @@
       <button class="settings-btn" type="button" aria-label="设置" data-testid="open-settings" @click="chat.settingsOpen = true">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M18 6l-1.6 1.6M7.6 16.4 6 18" /></svg>
       </button>
+      <button class="account" type="button" data-testid="logout" @click="chat.logout()">
+        <strong>{{ chat.userName }}</strong>
+        <span>退出</span>
+      </button>
       <button class="connect" type="button" data-testid="connect" @click="chat.openConnect()">
         <span>连接应用</span>
         <span class="mini-apps" aria-hidden="true">

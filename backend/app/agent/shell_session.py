@@ -99,11 +99,22 @@ def _unlink(path: Path) -> None:
 def _kill_pid(pid: int | None) -> None:
     if not pid:
         return
-    subprocess.run(
-        ["taskkill", "/F", "/T", "/PID", str(pid)],
-        capture_output=True,
-        check=False,
-    )
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            check=False,
+        )
+        return
+    import signal
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 def _remember_cwd(key: str, cwd_file: Path, fallback: Path) -> None:
@@ -135,6 +146,7 @@ async def _run_once(cwd: Path, command: str, timeout: int, cwd_file: Path) -> tu
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        **({} if os.name == "nt" else {"start_new_session": True}),
     )
     _live[id(proc)] = proc
     try:

@@ -19,6 +19,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
+.gate-boot { position: fixed; inset: 0; background: #080d17; }
 .shell { display: flex; height: 100%; background: #fff; overflow: hidden; }
 .sidebar {
   width: 300px;
@@ -201,18 +202,33 @@ html[data-theme="dark"] .intake-other { background: #232328; color: #f3f3f5; bor
 .text-btn { border: 0; background: transparent; color: #666; padding: 8px 14px; border-radius: 10px; }
 .create-btn { border: 0; background: #ececef; color: #b0b0b6; border-radius: 12px; padding: 8px 16px; }
 .create-btn:not(:disabled) { background: #1c1c1e; color: #fff; }
-.side-bottom { display: flex; align-items: center; gap: 8px; padding: 12px 14px 16px; }
+.account {
+  flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+  height: 36px; margin: 0; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: var(--muted);
+}
+.account strong {
+  color: var(--ink); font-weight: 650; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account span { color: var(--pink); font-size: 12px; flex: none; }
+.account:hover { background: #f4f4f6; }
+.side-bottom {
+  display: flex; align-items: center; gap: 4px;
+  margin: 4px 12px 14px; padding: 4px;
+  border: 1px solid var(--line); border-radius: 999px; background: #fff;
+}
 .settings-btn {
-  width: 36px; height: 36px; border-radius: 12px; border: 1px solid var(--line);
-  background: #fff; color: #444; display: grid; place-items: center;
+  width: 36px; height: 36px; border-radius: 999px; border: 0; flex: none;
+  background: transparent; color: #444; display: grid; place-items: center;
 }
 .settings-btn:hover { background: #f4f4f6; }
 .topbar, .side-tools { cursor: grab; }
 .topbar :is(button, select, a), .side-tools button { cursor: pointer; }
 .connect {
-  margin-left: auto; border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  flex: none; border: 0; background: transparent; border-radius: 999px;
   padding: 6px 8px 6px 12px; display: flex; align-items: center; gap: 8px;
 }
+.connect:hover { background: #f4f4f6; }
 .mini-apps { display: flex; }
 .dot { width: 14px; height: 14px; border-radius: 4px; display: block; margin-left: -4px; border: 1px solid #fff; }
 .dot.terminal { background: #111; }
@@ -454,6 +470,9 @@ html[data-theme="dark"] {
 html[data-theme="dark"] body,
 html[data-theme="dark"] .shell { background: #161618; color: #f3f3f5; }
 html[data-theme="dark"] .sidebar { background: #1c1c1f; border-color: #2c2c31; }
+html[data-theme="dark"] .side-bottom { background: #232328; border-color: #34343a; }
+html[data-theme="dark"] .connect:hover,
+html[data-theme="dark"] .account:hover,
 html[data-theme="dark"] .conv:hover,
 html[data-theme="dark"] .conv.active,
 html[data-theme="dark"] .settings-btn:hover,

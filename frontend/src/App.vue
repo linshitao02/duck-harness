@@ -1,6 +1,8 @@
 <template>
-  <Splash />
-  <div class="shell">
+  <div v-if="phase === 'boot'" class="gate-boot" />
+  <Splash v-else-if="phase === 'splash'" @done="afterSplash" />
+  <Login v-else-if="phase === 'login'" @success="enterApp" />
+  <div v-else class="shell">
     <Sidebar v-show="chat.sidebarOpen" :style="{ width: chat.sidebarWidth + 'px' }" />
     <div
       v-if="chat.sidebarOpen"
@@ -40,10 +42,15 @@ import ConnectSheet from "./components/ConnectSheet.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import TextMenu from "./components/TextMenu.vue";
 import Splash from "./components/Splash.vue";
+import Login from "./components/Login.vue";
+import { api } from "./api";
 
 const chat = useChatStore();
 const desktop = ref(false);
 const splitting = ref(false);
+const phase = ref("boot");
+const pendingUser = ref(null);
+let entered = false;
 
 function markDesktop() {
   desktop.value = Boolean(window.pywebview);
@@ -91,9 +98,38 @@ function desktopReady() {
   chat.loadDesktopLayout();
 }
 
-onMounted(() => {
+function enterApp() {
+  if (entered) return;
+  entered = true;
+  pendingUser.value = null;
+  phase.value = "app";
+  chat.boot().catch((error) => chat.notify(error.message || "无法连接后端"));
+}
+
+function afterSplash() {
+  if (pendingUser.value) enterApp();
+  else phase.value = "login";
+}
+
+function onUnauthorized() {
+  if (phase.value === "app") phase.value = "login";
+}
+
+onMounted(async () => {
   desktopReady();
   window.addEventListener("pywebviewready", desktopReady);
-  chat.boot().catch((error) => chat.notify(error.message || "无法连接后端"));
+  window.addEventListener("harness-unauthorized", onUnauthorized);
+  let session = null;
+  try {
+    session = await api("/api/auth/session");
+  } catch {
+    session = null;
+  }
+  if (session?.authenticated && session.remember) {
+    enterApp();
+    return;
+  }
+  pendingUser.value = session?.authenticated ? session.user : null;
+  phase.value = "splash";
 });
 </script>

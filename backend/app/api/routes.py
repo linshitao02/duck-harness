@@ -325,8 +325,8 @@ def patch_conversation(conversation_id: int, body: ConversationPatch, db: Sessio
 @router.delete("/conversations/{conversation_id}")
 def remove_conversation(conversation_id: int, db: Session = Depends(get_db)):
     row = owned_conversation(db, conversation_id)
-    delete_conversation(db, row)
-    return {"ok": True}
+    removed = delete_conversation(db, row)
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/conversations/{conversation_id}/messages")

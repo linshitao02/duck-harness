@@ -667,12 +667,26 @@ async def run_due_schedules() -> int:
         db.close()
 
 
+def raise_room_turn_limits(db) -> None:
+    from ..agent.room import normalize_max_turns
+
+    rows = db.scalars(select(Conversation).where(Conversation.kind == "group")).all()
+    for row in rows:
+        state = dict(row.room_state or {})
+        limit = normalize_max_turns(state.get("max_turns"))
+        if state.get("max_turns") == limit:
+            continue
+        state["max_turns"] = limit
+        row.room_state = state
+
+
 def startup() -> None:
     from ..db import init_db, session_scope
 
     init_db()
     with session_scope() as db:
         ensure_defaults(db)
+        raise_room_turn_limits(db)
         sweep_orphaned_conversation_files(db)
         if get_settings().auto_seed:
             seed_if_empty(db)
@@ -864,7 +878,7 @@ def _discard_files(conversation_id: int, workspace: str | None) -> None:
         logger.warning("清理会话撤销副本失败：%s", conversation_id, exc_info=True)
 
 
-def delete_conversation(db, conversation: Conversation) -> None:
+def delete_conversation(db, conversation: Conversation) -> list[int]:
     rows = [conversation]
     release = []
     if (conversation.kind or "") == "group":
@@ -874,6 +888,7 @@ def delete_conversation(db, conversation: Conversation) -> None:
             else:
                 release.append(row)
     removed = [(row.id, row.workspace) for row in rows]
+    removed_ids = [row.id for row in rows]
     for row in rows:
         conversation_id = row.id
         db.query(Attachment).filter(Attachment.conversation_id == conversation_id).delete()
@@ -890,6 +905,7 @@ def delete_conversation(db, conversation: Conversation) -> None:
     db.commit()
     for conversation_id, workspace in removed:
         _discard_files(conversation_id, workspace)
+    return removed_ids
 
 
 _MEMBER_COLORS = ["#8d5a3c", "#e23b3b", "#f08a24", "#3b82f6", "#7c4dff", "#3cbe5a"]
@@ -944,7 +960,7 @@ def _link_existing_group(db, title: str, conversation_ids: list[int], icon_key: 
         room_state={
             "current_speaker": names[0],
             "current_turn": 0,
-            "max_turns": 6,
+            "max_turns": 12,
             "member_ids": [row.id for row, _name in chosen],
         },
     )
@@ -999,7 +1015,7 @@ def create_group(
         icon_color=tint,
         kind="group",
         **owner_kwargs(),
-        room_state={"current_speaker": names[0], "current_turn": 0, "max_turns": 6, "member_ids": []},
+        room_state={"current_speaker": names[0], "current_turn": 0, "max_turns": 12, "member_ids": []},
     )
     db.add(group)
     db.flush()

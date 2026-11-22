@@ -8,6 +8,18 @@ from dataclasses import dataclass, field
 
 USER = "user"
 USER_NAMES = {"user", "用户"}
+DEFAULT_MAX_TURNS = 12
+
+
+def normalize_max_turns(raw) -> int:
+    """早期的群把上限写成 6，而且没有单独的设置入口。读到 6 时用现在的上限。"""
+    if raw is None or raw == 6:
+        return DEFAULT_MAX_TURNS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_TURNS
+    return value if value > 0 else DEFAULT_MAX_TURNS
 
 
 @dataclass
@@ -21,7 +33,7 @@ class RoomMessage:
 @dataclass
 class SwarmRoom:
     participants: list[str]
-    max_turns: int | None = 6
+    max_turns: int | None = DEFAULT_MAX_TURNS
     current_speaker: str = ""
     current_turn: int = 0
     thread: list[RoomMessage] = field(default_factory=list)

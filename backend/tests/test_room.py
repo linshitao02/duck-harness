@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.agent.group_run import run_group_turn
-from app.agent.room import RoomMessage, SwarmRoom
+from app.agent.room import RoomMessage, SwarmRoom, normalize_max_turns
 from app.agent.tools import ToolContext, execute, schemas
 from app.db import open_session
 from app.models import Conversation
@@ -18,6 +18,12 @@ def test_swarm_follows_the_last_handoff_and_stops_for_the_user():
     assert room.observe([RoomMessage("风险评审员", "可以收", target="user", kind="handoff")]) is None
     assert room.terminated
     assert room.stop_reason == "交接给用户"
+
+
+def test_old_turn_cap_reads_as_the_current_limit():
+    assert normalize_max_turns(None) == 12
+    assert normalize_max_turns(6) == 12
+    assert normalize_max_turns(4) == 4
 
 
 def test_missing_handoff_keeps_the_same_speaker_until_max_turns():

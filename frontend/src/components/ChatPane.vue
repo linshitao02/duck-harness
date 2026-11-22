@@ -17,10 +17,21 @@
         </svg>
       </button>
       <div class="title-pill">
-        <span class="logo" aria-hidden="true" :style="badgeStyle(chat.active?.icon_key, chat.active?.icon_color)">
-          <Badge :name="chat.active?.icon_key || 'spark'" />
-        </span>
-        <span class="title" data-testid="chat-title">{{ chat.active?.title || "新会话" }}</span>
+        <button
+          type="button"
+          class="title-id"
+          :class="{ 'can-open': roomMembers.length }"
+          data-testid="open-members"
+          :aria-expanded="membersOpen"
+          :aria-label="roomMembers.length ? (membersOpen ? '收起群成员' : '查看群成员') : (chat.active?.title || '新会话')"
+          @mousedown.stop
+          @click="toggleMembers"
+        >
+          <span class="logo" aria-hidden="true" :style="badgeStyle(chat.active?.icon_key, chat.active?.icon_color)">
+            <Badge :name="chat.active?.icon_key || 'spark'" />
+          </span>
+          <span class="title" data-testid="chat-title">{{ chat.active?.title || "新会话" }}</span>
+        </button>
         <select class="model-select" data-testid="model-select" :value="modelValue" @mousedown.stop @change="changeModel">
           <option v-if="!modelChoices.length" value="">请先在设置里配置模型</option>
           <optgroup v-for="provider in modelChoices" :key="provider.id" :label="provider.label">
@@ -41,18 +52,7 @@
     </header>
 
     <section ref="scroller" class="thread" data-testid="thread">
-      <div v-if="openBundle" class="private-panel" data-testid="private-thread">
-        <p class="private-head">{{ chat.active?.member_name || chat.active?.title }} → {{ openBundle.counterpart }}</p>
-        <article v-for="note in openBundle.messages" :key="note.id" class="row" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
-          <p class="speaker-line">{{ note.speaker }}</p>
-          <div class="bubble" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
-            <div class="text" v-html="renderText(note.content)" />
-          </div>
-        </article>
-        <button type="button" class="close-private" data-testid="close-private" @click="openPrivate = ''">关闭聊天</button>
-      </div>
-      <template v-else>
-      <div v-if="!chat.messages.length && !(chat.privateThreads || []).length && !chat.intakeBusy" class="empty">
+      <div v-if="!threadItems.length && !(chat.privateThreads || []).length && !chat.intakeBusy" class="empty">
         <h1>{{ chat.active?.title || "新会话" }}</h1>
         <p v-if="chat.active?.kind === 'group'">用 @成员名 把目标发给他。项目经理会拆开任务，再派给其他成员。</p>
         <p v-else>直接说你要做的事。我可以改代码、跑本机命令、联网搜索，也会记住你的偏好。</p>
@@ -65,7 +65,7 @@
             <button type="button" aria-label="再发一次" @click="again(item.message.content)">↩</button>
           </div>
           <div class="bubble user" :style="bubbleStyle(item.message)">
-            <div v-if="item.message.content" class="text" v-html="renderText(item.message.content)" />
+            <MentionText v-if="item.message.content" :value="item.message.content" />
             <div v-for="file in item.message.attachments || []" :key="file.id" class="file-card" data-testid="file-card">
               <span class="file-icon" :data-kind="fileKind(file.filename)">{{ fileMark(file.filename) }}</span>
               <span class="file-meta">
@@ -79,7 +79,12 @@
           </div>
         </article>
         <article v-else class="row assistant" data-testid="message">
-          <p v-if="item.speaker" class="speaker-line" data-testid="speaker-name">{{ item.speaker }}</p>
+          <p v-if="item.speaker" class="speaker-line" data-testid="speaker-name">
+            <span v-if="person(item.speaker)" class="badge" :style="badgeStyle(person(item.speaker).icon_key, person(item.speaker).icon_color)">
+              <Badge :name="person(item.speaker).icon_key" />
+            </span>
+            <span>{{ item.speaker }}</span>
+          </p>
           <details v-if="item.notes.length || item.tools.length || item.streaming" class="work" data-testid="work-log" :open="isOpen(item, 'work')" @toggle="onToggle(item, 'work', $event)">
             <summary>
               <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
@@ -106,7 +111,7 @@
               <summary>思考过程</summary>
               <p>{{ item.reasoning }}</p>
             </details>
-            <div v-if="item.answer" class="text" v-html="renderText(item.answer)" />
+            <MentionText v-if="item.answer" :value="spoken(item)" />
             <template v-for="tool in item.diffs" :key="tool.id">
               <div class="diff-view">
                 <div v-for="(line, index) in tool.diff.split('\n')" :key="index" :class="diffClass(line)">{{ line }}</div>
@@ -182,35 +187,161 @@
             </template>
           </div>
         </article>
+        <template v-if="item.id === firstIntakeId">
+          <div v-if="(chat.privateThreads || []).length" class="private-folds">
+            <p v-for="bundle in chat.privateThreads" :key="bundle.counterpart" class="private-fold">
+              <span>{{ bundle.count }}条消息往来：</span>
+              <button type="button" data-testid="private-toggle" @click="openPrivate = openPrivate === bundle.counterpart ? '' : bundle.counterpart">
+                <span v-if="person(bundle.counterpart)" class="badge" :style="badgeStyle(person(bundle.counterpart).icon_key, person(bundle.counterpart).icon_color)">
+                  <Badge :name="person(bundle.counterpart).icon_key" />
+                </span>
+                <span>{{ bundle.counterpart }}</span>
+              </button>
+            </p>
+          </div>
+          <div v-if="openBundle" class="private-panel" data-testid="private-thread">
+            <p class="private-head">{{ chat.active?.member_name || chat.active?.title }} → {{ openBundle.counterpart }}</p>
+            <article v-for="note in openBundle.messages" :key="note.id" class="row" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+              <p class="speaker-line">{{ note.speaker }}</p>
+              <div class="bubble" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+                <MentionText :value="note.content" />
+              </div>
+            </article>
+            <button type="button" class="close-private" data-testid="close-private" @click="openPrivate = ''">关闭聊天</button>
+          </div>
+        </template>
       </template>
-      <p v-if="chat.intakeBusy && !openBundle" class="intake-thinking" data-testid="intake-thinking">
+      <p v-if="chat.intakeBusy" class="intake-thinking" data-testid="intake-thinking">
         <i></i><i></i><i></i>
         <span>{{ thinkingLine }}</span>
       </p>
-      <div v-if="!openBundle && (chat.privateThreads || []).length" class="private-folds">
-        <p v-for="bundle in chat.privateThreads" :key="bundle.counterpart" class="private-fold">
-          <span>{{ bundle.count }}条消息往来：</span>
-          <button type="button" data-testid="private-toggle" @click="openPrivate = bundle.counterpart">{{ bundle.counterpart }}</button>
-        </p>
-      </div>
+      <template v-if="!firstIntakeId">
+        <div v-if="(chat.privateThreads || []).length" class="private-folds">
+          <p v-for="bundle in chat.privateThreads" :key="bundle.counterpart" class="private-fold">
+            <span>{{ bundle.count }}条消息往来：</span>
+            <button type="button" data-testid="private-toggle" @click="openPrivate = openPrivate === bundle.counterpart ? '' : bundle.counterpart">
+              <span v-if="person(bundle.counterpart)" class="badge" :style="badgeStyle(person(bundle.counterpart).icon_key, person(bundle.counterpart).icon_color)">
+                <Badge :name="person(bundle.counterpart).icon_key" />
+              </span>
+              <span>{{ bundle.counterpart }}</span>
+            </button>
+          </p>
+        </div>
+        <div v-if="openBundle" class="private-panel" data-testid="private-thread">
+          <p class="private-head">{{ chat.active?.member_name || chat.active?.title }} → {{ openBundle.counterpart }}</p>
+          <article v-for="note in openBundle.messages" :key="note.id" class="row" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+            <p class="speaker-line">{{ note.speaker }}</p>
+            <div class="bubble" :class="note.speaker === chat.active?.member_name ? 'user' : 'assistant'">
+              <MentionText :value="note.content" />
+            </div>
+          </article>
+          <button type="button" class="close-private" data-testid="close-private" @click="openPrivate = ''">关闭聊天</button>
+        </div>
       </template>
     </section>
     <Composer />
+    <aside v-if="membersOpen && roomMembers.length" class="member-rail" data-testid="member-rail">
+      <header>
+        <h2>群成员</h2>
+        <button type="button" @click="membersOpen = false">关闭</button>
+      </header>
+      <div class="member-rail-list">
+        <button
+          v-for="member in roomMembers"
+          :key="member.id"
+          type="button"
+          class="member-card"
+          :class="{ active: member.id === chat.activeId }"
+          :data-testid="'rail-member-' + member.id"
+          @click="chat.select(member.id)"
+        >
+          <span class="badge" :style="badgeStyle(member.icon_key, member.icon_color)">
+            <Badge :name="member.icon_key" />
+          </span>
+          <span class="member-copy">
+            <strong>{{ member.member_name || member.title }}</strong>
+            <small>{{ member.preview || "群成员" }}</small>
+          </span>
+        </button>
+      </div>
+    </aside>
   </main>
 </template>
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { taskPhrase, toolPhrase } from "../activity";
-import { formatSize, renderText } from "../api";
+import { formatSize } from "../api";
 import { useChatStore } from "../store";
 import { groupThread, toolLine, workDuration } from "../turns";
 import { badgeStyle } from "../shapes";
 import Badge from "./Badge.vue";
 import Composer from "./Composer.vue";
+import MentionText from "./MentionText.vue";
 
 const chat = useChatStore();
+const membersOpen = ref(false);
 const threadItems = computed(() => groupThread(chat.messages));
+const firstIntakeId = computed(() => threadItems.value.find((item) => item.intake)?.id || null);
+const roomId = computed(() => {
+  const active = chat.active;
+  if (!active) return null;
+  return active.kind === "group" ? active.id : active.room_id || null;
+});
+const roomMembers = computed(() => {
+  if (!roomId.value) return [];
+  return chat.conversations.filter((item) => item.room_id === roomId.value);
+});
+
+function roomPeople() {
+  const active = chat.active;
+  if (!active) return [];
+  const id = active.kind === "group" ? active.id : active.room_id;
+  if (!id) return [];
+  return chat.conversations.filter((item) => item.room_id === id);
+}
+
+function person(name) {
+  if (!name || name === "user" || name === "用户") return null;
+  return roomPeople().find((item) => item.member_name === name || item.title === name) || null;
+}
+
+function spoken(item) {
+  const text = item.answer || "";
+  const who = person(item.handoffTarget);
+  if (!who) return text;
+  const name = who.member_name || who.title || "";
+  if (!name || text.includes(`@${name}`) || text.includes(`＠${name}`)) return text;
+  return inlineMention(text, name);
+}
+
+function inlineMention(text, name) {
+  let index = 0;
+  while (index < text.length) {
+    if (text.startsWith("```", index)) {
+      const end = text.indexOf("```", index + 3);
+      index = end < 0 ? text.length : end + 3;
+      continue;
+    }
+    if (text[index] === "`") {
+      const end = text.indexOf("`", index + 1);
+      index = end < 0 ? index + 1 : end + 1;
+      continue;
+    }
+    if (text.startsWith(name, index)) return text.slice(0, index) + "@" + text.slice(index);
+    index += 1;
+  }
+  return text;
+}
+
+function toggleMembers() {
+  if (!roomMembers.value.length) return;
+  membersOpen.value = !membersOpen.value;
+}
+
+watch(roomId, () => {
+  membersOpen.value = false;
+});
 const otherFor = ref(null);
 const otherText = ref("");
 const thinkingLine = computed(() => {

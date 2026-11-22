@@ -3,6 +3,22 @@
     <div v-if="chat.pending.length" class="pending">
       <span v-for="file in chat.pending" :key="file.id">{{ file.filename }}</span>
     </div>
+    <div v-if="suggestions.length" class="mention-menu" data-testid="mention-menu" role="listbox">
+      <button
+        v-for="(member, index) in suggestions"
+        :key="member.id"
+        type="button"
+        role="option"
+        :class="{ active: index === activeIndex }"
+        :data-testid="'mention-option-' + member.id"
+        @mousedown.prevent="pick(member)"
+      >
+        <span class="badge" :style="badgeStyle(member.icon_key, member.icon_color)">
+          <Badge :name="member.icon_key" />
+        </span>
+        <span>{{ member.member_name || member.title }}</span>
+      </button>
+    </div>
     <form class="composer" @submit.prevent="chat.send()">
       <button class="plus" type="button" aria-label="更多" data-testid="plus" @click="chat.menuOpen = !chat.menuOpen">+</button>
       <div v-if="chat.menuOpen" class="plus-menu">
@@ -22,8 +38,10 @@
         rows="1"
         :placeholder="chat.active?.kind === 'group' ? '用 @成员名 说明目标，例如 @项目经理' : ('给 ' + (chat.active?.title || '新会话') + ' 发消息')"
         :spellcheck="chat.settings.spellcheck !== '0'"
-        @input="grow"
-        @keydown.enter="onEnter"
+        @input="onInput"
+        @click="syncMention"
+        @keyup="syncMention"
+        @keydown="onKeydown"
       />
       <button class="mic" type="button" aria-label="语音输入" @click="listen">
         <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4" /></svg>
@@ -49,10 +67,31 @@
 
 <script setup>
 import { computed, ref } from "vue";
+import { badgeStyle } from "../shapes";
 import { useChatStore } from "../store";
+import Badge from "./Badge.vue";
 
 const chat = useChatStore();
 const box = ref(null);
+const mention = ref(null);
+const activeIndex = ref(0);
+
+const roomMembers = computed(() => {
+  const active = chat.active;
+  if (!active) return [];
+  const roomId = active.kind === "group" ? active.id : active.room_id;
+  if (!roomId) return [];
+  return chat.conversations.filter((item) => item.room_id === roomId);
+});
+
+const suggestions = computed(() => {
+  if (!mention.value || !roomMembers.value.length) return [];
+  const query = mention.value.text.toLowerCase();
+  return roomMembers.value.filter((item) => {
+    const name = (item.member_name || item.title || "").toLowerCase();
+    return !query || name.includes(query);
+  });
+});
 
 function inkOn(color) {
   const raw = String(color || "").replace("#", "");
@@ -78,8 +117,29 @@ const modeLabel = computed(() => {
   return "";
 });
 
-function onEnter(event) {
+function onKeydown(event) {
   if (event.isComposing) return;
+  if (suggestions.value.length && event.key === "ArrowDown") {
+    event.preventDefault();
+    activeIndex.value = (activeIndex.value + 1) % suggestions.value.length;
+    return;
+  }
+  if (suggestions.value.length && event.key === "ArrowUp") {
+    event.preventDefault();
+    activeIndex.value = (activeIndex.value - 1 + suggestions.value.length) % suggestions.value.length;
+    return;
+  }
+  if (suggestions.value.length && event.key === "Escape") {
+    event.preventDefault();
+    mention.value = null;
+    return;
+  }
+  if (event.key !== "Enter") return;
+  if (suggestions.value.length) {
+    event.preventDefault();
+    pick(suggestions.value[Math.min(activeIndex.value, suggestions.value.length - 1)]);
+    return;
+  }
   const shortcut = chat.settings.send_shortcut || "enter";
   if (shortcut === "ctrl_enter") {
     if (event.ctrlKey || event.metaKey) {
@@ -91,6 +151,47 @@ function onEnter(event) {
   if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
   event.preventDefault();
   chat.send();
+}
+
+function onInput(event) {
+  grow(event);
+  syncMention();
+}
+
+function syncMention() {
+  const el = box.value;
+  if (!el || !roomMembers.value.length) {
+    mention.value = null;
+    return;
+  }
+  const pos = el.selectionStart ?? chat.draft.length;
+  const before = chat.draft.slice(0, pos);
+  const found = before.match(/(^|[\s\n])[@＠]([^\s@＠]*)$/);
+  if (!found) {
+    mention.value = null;
+    return;
+  }
+  const text = found[2];
+  if (!mention.value || mention.value.text !== text) activeIndex.value = 0;
+  mention.value = { start: pos - text.length - 1, text };
+}
+
+function pick(member) {
+  const name = member.member_name || member.title || "";
+  const el = box.value;
+  const pos = el?.selectionStart ?? chat.draft.length;
+  const start = mention.value?.start ?? Math.max(0, pos - 1);
+  chat.draft = `${chat.draft.slice(0, start)}@${name} ${chat.draft.slice(pos)}`;
+  mention.value = null;
+  const caret = start + name.length + 2;
+  requestAnimationFrame(() => {
+    el?.focus();
+    el?.setSelectionRange(caret, caret);
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 140) + "px";
+    }
+  });
 }
 
 function grow(event) {

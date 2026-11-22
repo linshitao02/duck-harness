@@ -10,10 +10,16 @@ from ..models import Conversation, Message
 from ..services.runtime import all_settings, room_members
 from .loop import _stopped, run_loop, turn_tokens
 from .providers import hub
-from .room import USER, RoomMessage, SwarmRoom
+from .room import USER, RoomMessage, SwarmRoom, normalize_max_turns
 from .tools import ToolContext, broker, group_tool_names
 
 logger = logging.getLogger("harness.group")
+
+
+def _remember_room(conversation: Conversation, room: SwarmRoom) -> None:
+    state = dict(conversation.room_state or {})
+    state.update(room.state())
+    conversation.room_state = state
 
 
 def load_room(conversation: Conversation, members: list[Conversation]) -> SwarmRoom:
@@ -21,7 +27,7 @@ def load_room(conversation: Conversation, members: list[Conversation]) -> SwarmR
     names = [row.member_name for row in members]
     room = SwarmRoom(
         names,
-        max_turns=state.get("max_turns") if state.get("max_turns") is not None else 6,
+        max_turns=normalize_max_turns(state.get("max_turns")),
         current_speaker=str(state.get("current_speaker") or names[0]),
         current_turn=int(state.get("current_turn") or 0),
     )
@@ -62,9 +68,17 @@ def _member_system(member: Conversation, names: list[str]) -> str:
         f"{member.member_prompt}\n"
         f"群成员：{others}。用户不在这个名单里，交回用户时 target 填 user。\n"
         "你正在群聊里发言。房间里的其他人只能看到你最后的正文，看不到工具过程。\n"
-        "正文写完后必须调用 handoff。target 必须是上面某个成员的原名；这一轮该交回用户时 target 填 user。\n"
+        "做完你这一段后，由你判断下一位，并调用一次 handoff。target 填成员原名或 user，不要带 @。\n"
+        "往下走：你这份结果已经够下一位接着做，把 target 写成这位成员。\n"
+        "往回退：交给你的结果还达不到要求。退给应该修改的那位成员，正文写明差在哪里。\n"
+        "交给用户：整件事已经做完，或者只有用户能做这个决定。\n"
+        "只选一个 target。按照当前结果判断，不要默认某个角色永远交给谁，也不要替别人做他们的工作。\n"
+        "交给成员时，把 @ 写进句子里、紧挨着你点名的那个人，例如「交给@名字，请补上缺少的部分」。"
+        "不要在整段写完后另起一行单独 @。交给用户时正文不必写 @。\n"
+        "正文要带上下一位需要的结果：你做了什么、结论是什么、还有什么没完成。不要只写已交给谁。\n"
         "只在正文里写 @名字不会让对方发言，只有 handoff 的 target 才算数。\n"
-        "只想让某一个成员看到、不想写进群聊时，调用 send_private。"
+        "有些话只该一个成员看到、不该留在群记录里时，调用 send_private。to 填那位成员的原名，text 写私聊正文。\n"
+        "私聊不会让对方开口，也不能代替 handoff。群里都要知道的派活、结果和退回原因，写在正文里。"
     )
 
 
@@ -127,8 +141,9 @@ async def _speak_with_loop(db, conversation, member, room: SwarmRoom, emit, toke
             {
                 "role": "user",
                 "content": (
-                    "你这一轮还没有调用 handoff。请立刻调用 handoff。"
-                    "任务还没做完时，target 填下一位成员的原名；只有全部完成、要交回用户时才填 user。"
+                    "你这一轮还没有调用 handoff。请立刻调用一次。"
+                    "由你判断 target：结果够下一位接着做，就填那位成员的原名；还达不到要求，就退给应该修改的成员；整件事做完或只有用户能决定，就填 user。"
+                    "target 不要带 @。交给成员时，正文句子里要有 @加这个原名。"
                 ),
             }
         )
@@ -238,16 +253,16 @@ async def run_group_turn(db, conversation, content: str, emit, token: str, speak
         try:
             nxt = room.observe([published])
         except ValueError as exc:
-            conversation.room_state = room.state()
+            _remember_room(conversation, room)
             db.commit()
             await emit({"type": "error", "message": str(exc)})
             return
-        conversation.room_state = room.state()
+        _remember_room(conversation, room)
         db.commit()
         await emit({"type": "token", "text": spoken, "speaker": published.source})
         if nxt == published.source and target == published.source:
             break
-    conversation.room_state = room.state()
+    _remember_room(conversation, room)
     db.commit()
     await emit({"type": "done", "content": conversation.preview or ""})
 

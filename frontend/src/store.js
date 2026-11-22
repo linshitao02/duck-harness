@@ -238,12 +238,27 @@ export const useChatStore = defineStore("chat", {
       if (index >= 0) this.conversations[index] = data;
     },
     async remove(id) {
-      await api(`/api/conversations/${id}`, { method: "DELETE" });
-      this.conversations = this.conversations.filter((item) => item.id !== id);
-      if (this.activeId === id) {
-        this.activeId = this.conversations[0]?.id || null;
+      let removed = [Number(id)];
+      try {
+        const data = await api(`/api/conversations/${id}`, { method: "DELETE" });
+        if (Array.isArray(data?.removed) && data.removed.length) removed = data.removed.map(Number);
+      } catch (error) {
+        if (error.message !== "会话不存在") {
+          this.notify(error.message || "删除失败");
+          return;
+        }
+      }
+      const gone = new Set(removed);
+      this.conversations = this.conversations.filter((item) => !gone.has(item.id));
+      try {
+        await this.refreshConversations();
+      } catch {
+        // 刷新失败时保留刚才从列表里拿掉的结果。
+      }
+      if (!this.conversations.some((item) => item.id === this.activeId)) {
         this.messages = [];
         this.privateThreads = [];
+        this.activeId = this.conversations[0]?.id || null;
         if (this.activeId) await this.select(this.activeId);
       }
     },

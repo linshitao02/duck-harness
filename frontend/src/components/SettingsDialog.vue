@@ -99,6 +99,7 @@
               <button type="button" data-testid="save-deepseek" :disabled="saving" @click="saveDeepseek">保存</button>
               <button v-if="chat.deepseekKeySource === 'settings'" type="button" class="ghost" @click="clearDeepseek">清除已保存的密钥</button>
             </div>
+            <p v-if="deepseekStatus" class="settings-note" data-testid="deepseek-save-status">{{ deepseekStatus }}</p>
           </section>
           <section class="settings-card">
             <h3>Ollama</h3>
@@ -126,10 +127,7 @@
         <div v-else-if="tab === 'computer'" class="settings-body">
           <section class="settings-card">
             <h3>工作区</h3>
-            <label class="settings-field">目录<input v-model="workspace" /></label>
-            <div class="settings-actions">
-              <button type="button" @click="save({ workspace })">保存</button>
-            </div>
+            <label class="settings-field">目录<input :value="chat.settings.workspace || ''" readonly /></label>
           </section>
         </div>
 
@@ -174,8 +172,8 @@ const tab = ref("general");
 const saving = ref(false);
 const deepseekBase = ref(chat.settings.deepseek_base || "https://api.deepseek.com");
 const deepseekKey = ref("");
+const deepseekStatus = ref("");
 const ollamaBase = ref(chat.settings.ollama_base || "http://127.0.0.1:11434");
-const workspace = ref(chat.settings.workspace || "");
 const usage = ref(null);
 
 const tabs = [
@@ -227,12 +225,19 @@ async function save(values) {
 async function saveDeepseek() {
   saving.value = true;
   try {
+    const nextKey = deepseekKey.value.trim();
     const body = { deepseek_base: deepseekBase.value.trim() };
-    if (deepseekKey.value.trim()) body.deepseek_api_key = deepseekKey.value.trim();
+    if (nextKey) body.deepseek_api_key = nextKey;
     await chat.saveSettings(body);
     deepseekKey.value = "";
     await chat.loadModels();
-    chat.notify(chat.deepseekConfigured ? "DeepSeek 已配置，现在可以选择" : "还没有可用的密钥");
+    const status = !chat.deepseekConfigured
+      ? "接口地址已保存。当前账号还没有可用的密钥。"
+      : nextKey
+        ? "已保存。当前账号的接口地址和 API Key 已覆盖。"
+        : "已保存。当前账号的接口地址已覆盖；密钥留空，仍用原来的。";
+    deepseekStatus.value = status;
+    chat.notify(status);
   } catch (error) {
     chat.notify(error.message || "没有保存");
   } finally {
@@ -246,6 +251,8 @@ async function clearDeepseek() {
     await chat.saveSettings({ clear_deepseek_key: true });
     deepseekKey.value = "";
     await chat.loadModels();
+    deepseekStatus.value = "已清除当前账号保存的密钥。";
+    chat.notify(deepseekStatus.value);
   } catch (error) {
     chat.notify(error.message || "没有清除");
   } finally {

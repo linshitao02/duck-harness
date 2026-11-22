@@ -83,6 +83,7 @@ function presentTurn(bucket) {
         card: message.card || null,
         status: message.status,
         createdAt: message.created_at,
+        handoff_target: message.handoff_target || "",
         id: message.id,
       },
     ];
@@ -133,6 +134,7 @@ function presentTurn(bucket) {
     questionCard: [...segments].reverse().find((item) => item.question)?.question || null,
     intake: intakeCard(bucket),
     answer: answer.map((item) => String(item.content || "").trim()).filter(Boolean).join("\n\n"),
+    handoffTarget: [...segments].reverse().map((item) => item.handoff_target).find(Boolean) || "",
     reasoning: answer.map((item) => item.reasoning).filter(Boolean).join("\n"),
     explore: exploreSummary(tools),
     startedAt: bucket.startedAt || null,

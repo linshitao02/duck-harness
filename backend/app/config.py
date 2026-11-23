@@ -1,11 +1,33 @@
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-ROOT_DIR = BACKEND_DIR.parent
+
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def install_root() -> Path:
+    """数据目录。打包后放在 exe 旁边，源码运行时是项目根目录。"""
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def resource_root() -> Path:
+    """只读资源。打包后在解压目录，源码运行时是项目根目录。"""
+    if is_frozen():
+        return Path(getattr(sys, "_MEIPASS"))
+    return install_root()
+
+
+ROOT_DIR = install_root()
+RESOURCE_DIR = resource_root()
+BACKEND_DIR = RESOURCE_DIR / "backend" if is_frozen() else Path(__file__).resolve().parents[1]
+ENV_FILE = ROOT_DIR / "backend" / ".env"
 UPLOAD_DIR = Path(os.environ.get("HARNESS_UPLOAD_DIR") or (ROOT_DIR / "data" / "uploads"))
 
 
@@ -16,7 +38,7 @@ def sqlite_file() -> Path:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(ENV_FILE) if ENV_FILE.exists() else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )

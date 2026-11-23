@@ -9,13 +9,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from .access import protected_for, reset_actor, set_actor
 from .api.routes import router
 from .auth import read_session, session_token_from_request
-from .config import ROOT_DIR, get_settings
+from .config import RESOURCE_DIR, get_settings
 from .db import open_session
 from .services.runtime import scheduler_loop, startup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-DIST = ROOT_DIR / "frontend" / "dist"
+DIST = RESOURCE_DIR / "frontend" / "dist"
 
 
 @asynccontextmanager

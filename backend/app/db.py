@@ -259,6 +259,7 @@ def _ensure_conversation_columns(engine) -> None:
         "conversations",
         [
             ("pinned", "TINYINT(1) NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
+            ("sort_order", "INT NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
             ("unread", "TINYINT(1) NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
             ("hidden", "TINYINT(1) NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0"),
             ("group_name", "VARCHAR(64) NOT NULL DEFAULT ''", "VARCHAR(64) NOT NULL DEFAULT ''"),

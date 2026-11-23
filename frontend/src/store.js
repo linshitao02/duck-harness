@@ -31,6 +31,19 @@ function savedSidebarWidth() {
   return Math.min(520, Math.max(220, Math.round(value)));
 }
 
+function phoneLayout() {
+  return Boolean(window.matchMedia?.("(max-width: 800px)")?.matches) && !window.pywebview;
+}
+
+function compareConversations(a, b) {
+  if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+  const order = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+  if (order) return order;
+  const time = String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+  if (time) return time;
+  return Number(b.id) - Number(a.id);
+}
+
 export const useChatStore = defineStore("chat", {
   state: () => ({
     conversations: [],
@@ -41,6 +54,7 @@ export const useChatStore = defineStore("chat", {
     streaming: false,
     intakeBusy: false,
     userName: "用户",
+    username: "",
     settings: {},
     deepseekConfigured: false,
     deepseekKeySource: "",
@@ -58,10 +72,13 @@ export const useChatStore = defineStore("chat", {
     memories: [],
     tasks: [],
     mcp: [],
+    skills: [],
+    settingsTab: "general",
+    settingsStamp: 0,
     mcpStatus: null,
     testing: "",
     testResult: "",
-    sidebarOpen: localStorage.getItem("harness.sidebarOpen") !== "0",
+    sidebarOpen: phoneLayout() ? false : localStorage.getItem("harness.sidebarOpen") !== "0",
     sidebarWidth: savedSidebarWidth(),
   }),
   getters: {
@@ -140,6 +157,7 @@ export const useChatStore = defineStore("chat", {
       ]);
       this.settings = settings.values;
       this.userName = settings.user.name;
+      this.username = settings.user.username || "";
       this.deepseekConfigured = settings.deepseek_configured;
       this.deepseekKeySource = settings.deepseek_key_source || "";
       this.models = models;
@@ -162,6 +180,7 @@ export const useChatStore = defineStore("chat", {
       this.activeId = id;
       this.menuOpen = false;
       this.searchOpen = false;
+      if (phoneLayout()) this.sidebarOpen = false;
       const current = this.conversations.find((item) => item.id === id);
       if (current?.unread) this.patchConversation(id, { unread: false });
       const token = ++loadToken;
@@ -231,6 +250,18 @@ export const useChatStore = defineStore("chat", {
       } catch (error) {
         this.notify(error.message || "创建群聊失败");
         return null;
+      }
+    },
+    async reorderConversations(ids) {
+      const rank = new Map(ids.map((id, index) => [Number(id), index]));
+      this.conversations = this.conversations
+        .map((item) => (rank.has(item.id) ? { ...item, sort_order: rank.get(item.id) } : item))
+        .sort(compareConversations);
+      try {
+        await api("/api/conversations/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+      } catch (error) {
+        this.notify(error.message || "顺序没有保存");
+        await this.refreshConversations();
       }
     },
     async patchConversation(id, body) {
@@ -529,22 +560,42 @@ export const useChatStore = defineStore("chat", {
       await navigator.clipboard.writeText(lines.join("\n\n"));
       this.notify("对话已复制");
     },
-    async openConnect() {
-      this.connectOpen = !this.connectOpen;
-      if (!this.connectOpen) return;
-      try {
-      const [doctor, memories, tasks, mcp, models] = await Promise.all([
-        api("/api/doctor"),
+    openSettings(tab = "general") {
+      this.settingsTab = tab;
+      this.settingsOpen = true;
+      this.settingsStamp += 1;
+    },
+    async updateProfile(body) {
+      const user = await api("/api/auth/profile", { method: "POST", body: JSON.stringify(body) });
+      this.userName = user.name || this.userName;
+      this.username = user.username || this.username;
+      return user;
+    },
+    async loadLibrary() {
+      const [memories, tasks, mcp, skills] = await Promise.all([
         api("/api/memories"),
         api(this.activeId ? `/api/tasks?conversation_id=${this.activeId}` : "/api/tasks"),
         api("/api/mcp"),
-        api("/api/models"),
+        api("/api/skills"),
       ]);
-      this.doctor = doctor;
       this.memories = memories.items;
       this.tasks = tasks.items;
       this.mcp = mcp.items;
+      this.skills = skills.items;
       this.loadMcpStatus();
+    },
+    async addSkill(form) {
+      await api("/api/skills", { method: "POST", body: JSON.stringify(form) });
+      this.skills = (await api("/api/skills")).items;
+      this.notify("已添加技能");
+    },
+    async openConnect() {
+      this.connectOpen = !this.connectOpen;
+      if (!this.connectOpen) return;
+      if (phoneLayout()) this.sidebarOpen = false;
+      try {
+      const [doctor, models] = await Promise.all([api("/api/doctor"), api("/api/models")]);
+      this.doctor = doctor;
       this.models = models;
       } catch (error) {
         this.notify(error.message || "连接面板加载失败");

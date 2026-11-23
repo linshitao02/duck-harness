@@ -81,6 +81,7 @@ class Conversation(Base):
     icon_key: Mapped[str] = mapped_column(String(32), default="spark")
     icon_color: Mapped[str] = mapped_column(String(16), default="#ff4b8d")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     unread: Mapped[bool] = mapped_column(Boolean, default=False)
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     group_name: Mapped[str] = mapped_column(String(64), default="")

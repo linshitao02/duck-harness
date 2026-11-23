@@ -14,10 +14,10 @@ from ..agent.intake import answer_intake, close_intake, start_intake
 from ..agent.loop import cancel_turn, iter_events
 from ..agent.providers import OpenAICompatProvider, collect_text, hub
 from ..agent.tools import broker, load_skills
-from ..auth import COOKIE, drop_session, issue_session, login_user, public_user, read_session, register_user, session_token_from_request
+from ..auth import COOKIE, drop_session, issue_session, login_user, public_user, read_session, register_user, session_token_from_request, update_profile
 from ..config import UPLOAD_DIR, get_settings
 from ..db import get_engine, open_session
-from ..models import Attachment, Conversation, McpServer, Message, Skill, Task
+from ..models import Attachment, Conversation, McpServer, Message, Skill, Task, User
 from ..services.runtime import (
     all_settings,
     compact_conversation,
@@ -63,6 +63,16 @@ class ConversationIn(BaseModel):
     model: str | None = None
     icon_key: str | None = None
     icon_color: str | None = None
+
+
+class ProfileIn(BaseModel):
+    name: str | None = None
+    current_password: str = ""
+    new_password: str = ""
+
+
+class ReorderIn(BaseModel):
+    ids: list[int] = Field(default_factory=list)
 
 
 class ConversationPatch(BaseModel):
@@ -233,6 +243,19 @@ def session_status(request: Request, db: Session = Depends(get_db)):
     return _auth_payload(user, row.remember)
 
 
+@router.post("/auth/profile")
+def write_profile(body: ProfileIn, db: Session = Depends(get_db)):
+    uid = current_user_id()
+    user = db.get(User, uid) if uid else None
+    if user is None:
+        raise HTTPException(401, "请先登录")
+    try:
+        user = update_profile(db, user, body.name, body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return public_user(user)
+
+
 @router.post("/auth/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
     drop_session(db, session_token_from_request(request))
@@ -299,6 +322,23 @@ def create_group_chat(body: GroupIn, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return present_conversation(db, row)
+
+
+@router.post("/conversations/reorder")
+def reorder_conversations(body: ReorderIn, db: Session = Depends(get_db)):
+    if len(body.ids) < 2:
+        return {"ok": True}
+    if len(set(body.ids)) != len(body.ids):
+        raise HTTPException(400, "会话重复了")
+    rows = [owned_conversation(db, item) for item in body.ids]
+    same_pin = len({bool(row.pinned) for row in rows}) == 1
+    same_group = len({(row.group_name or "").strip() for row in rows}) == 1
+    if not same_pin or not same_group:
+        raise HTTPException(400, "只能在同一组里调整顺序")
+    for index, row in enumerate(rows):
+        row.sort_order = index
+    db.commit()
+    return {"ok": True}
 
 
 @router.patch("/conversations/{conversation_id}")

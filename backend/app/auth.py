@@ -102,6 +102,26 @@ def register_user(db, username: str, password: str, name: str = "") -> User:
     return user
 
 
+def update_profile(db, user: User, name: str | None, current_password: str, new_password: str) -> User:
+    changed = False
+    if name is not None:
+        display = name.strip()
+        if not display or len(display) > 64:
+            raise ValueError("显示名需要 1 到 64 个字")
+        user.name = display
+        changed = True
+    if new_password:
+        if not verify_password(current_password or "", user.password_hash or ""):
+            raise ValueError("当前密码不正确")
+        user.password_hash = hash_password(_clean_password(new_password))
+        changed = True
+    if not changed:
+        raise ValueError("没有要修改的内容")
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def login_user(db, username: str, password: str) -> User | None:
     username = (username or "").strip()
     user = db.scalar(select(User).where(User.username == username))

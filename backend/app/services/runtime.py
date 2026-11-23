@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select, text
 
 from ..access import current_user_id, owner_kwargs, private_workspace, reset_actor, set_actor
 from ..vault import reveal, seal, sealed
-from ..config import ROOT_DIR, UPLOAD_DIR, get_settings
+from ..config import RESOURCE_DIR, ROOT_DIR, UPLOAD_DIR, get_settings
 from ..agent.history import discard_journal, sweep_history
 from ..agent.diffutil import split_embedded_diff
 from ..models import (
@@ -343,6 +343,7 @@ def serialize_conversation(row: Conversation, group_members: dict[int, list[int]
         "icon_key": row.icon_key,
         "icon_color": row.icon_color,
         "pinned": bool(row.pinned),
+        "sort_order": int(row.sort_order or 0),
         "unread": bool(row.unread),
         "hidden": bool(row.hidden),
         "group_name": row.group_name or "",
@@ -424,7 +425,10 @@ def present_messages(db, conversation_id: int) -> list[dict]:
 
 def list_conversations(db, query: str = "") -> list[dict]:
     statement = select(Conversation).order_by(
-        Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc()
+        Conversation.pinned.desc(),
+        Conversation.sort_order.asc(),
+        Conversation.updated_at.desc(),
+        Conversation.id.desc(),
     )
     uid = current_user_id()
     if uid:
@@ -502,7 +506,7 @@ async def doctor(db) -> dict:
             "detail": str(workspace),
         }
     )
-    dist = ROOT_DIR / "frontend" / "dist" / "index.html"
+    dist = RESOURCE_DIR / "frontend" / "dist" / "index.html"
     checks.append({"name": "frontend", "ok": dist.exists(), "detail": "已构建" if dist.exists() else "尚未构建"})
     checks.append({"name": "python", "ok": True, "detail": platform.python_version()})
     required = {info["database"], "workspace"}

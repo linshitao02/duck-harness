@@ -3,7 +3,7 @@
     <div class="streaks" aria-hidden="true">
       <i v-for="item in streaks" :key="item" :style="{ '--n': item }" />
     </div>
-    <aside class="stage" aria-hidden="true">
+    <aside class="stage pywebview-drag-region" aria-hidden="true">
       <video
         v-if="motion && live"
         class="portrait"

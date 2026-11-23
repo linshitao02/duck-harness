@@ -195,6 +195,19 @@ def test_health_settings_and_conversation_crud(client, db):
         json={"title": "新 Bot", "icon_key": "heart", "icon_color": "#f5c542"},
     ).json()
     assert styled["icon_key"] == "heart" and styled["icon_color"] == "#f5c542" and styled["pinned"] is False
+    first = client.post("/api/conversations", json={"title": "甲"}).json()
+    second = client.post("/api/conversations", json={"title": "乙"}).json()
+    third = client.post("/api/conversations", json={"title": "丙"}).json()
+    order = [first["id"], third["id"], second["id"]]
+    assert client.post("/api/conversations/reorder", json={"ids": order}).json()["ok"] is True
+    titles = [
+        item["title"]
+        for item in client.get("/api/conversations").json()["items"]
+        if item["title"] in {"甲", "乙", "丙"}
+    ]
+    assert titles == ["甲", "丙", "乙"]
+    mixed = client.post("/api/conversations/reorder", json={"ids": [created["id"], first["id"]]})
+    assert mixed.status_code == 400
     assert client.delete(f"/api/conversations/{created['id']}").json()["ok"] is True
     assert client.get(f"/api/conversations/{created['id']}/messages").status_code == 404
 

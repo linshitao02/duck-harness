@@ -3,6 +3,13 @@
   <Splash v-else-if="phase === 'splash'" @done="afterSplash" />
   <Login v-else-if="phase === 'login'" @success="enterApp" />
   <div v-else class="shell">
+    <button
+      v-if="chat.sidebarOpen"
+      class="sidebar-backdrop"
+      type="button"
+      aria-label="关闭会话列表"
+      @click="chat.toggleSidebar()"
+    />
     <Sidebar v-show="chat.sidebarOpen" :style="{ width: chat.sidebarWidth + 'px' }" />
     <div
       v-if="chat.sidebarOpen"
@@ -18,16 +25,17 @@
     <SettingsDialog v-if="chat.settingsOpen" />
     <TextMenu />
     <div v-if="chat.toast" class="toast" role="status">{{ chat.toast }}</div>
-    <div v-if="desktop" class="resize-layer" aria-hidden="true">
-      <div class="rz n" @pointerdown.prevent="startResize('n', $event)" />
-      <div class="rz s" @pointerdown.prevent="startResize('s', $event)" />
-      <div class="rz e" @pointerdown.prevent="startResize('e', $event)" />
-      <div class="rz w" @pointerdown.prevent="startResize('w', $event)" />
-      <div class="rz ne" @pointerdown.prevent="startResize('ne', $event)" />
-      <div class="rz nw" @pointerdown.prevent="startResize('nw', $event)" />
-      <div class="rz se" @pointerdown.prevent="startResize('se', $event)" />
-      <div class="rz sw" @pointerdown.prevent="startResize('sw', $event)" />
-    </div>
+  </div>
+  <WindowChrome v-if="desktop && phase !== 'app'" />
+  <div v-if="desktop && phase !== 'boot'" class="resize-layer" aria-hidden="true">
+    <div class="rz n" @pointerdown.prevent="startResize('n', $event)" />
+    <div class="rz s" @pointerdown.prevent="startResize('s', $event)" />
+    <div class="rz e" @pointerdown.prevent="startResize('e', $event)" />
+    <div class="rz w" @pointerdown.prevent="startResize('w', $event)" />
+    <div class="rz ne" @pointerdown.prevent="startResize('ne', $event)" />
+    <div class="rz nw" @pointerdown.prevent="startResize('nw', $event)" />
+    <div class="rz se" @pointerdown.prevent="startResize('se', $event)" />
+    <div class="rz sw" @pointerdown.prevent="startResize('sw', $event)" />
   </div>
 </template>
 
@@ -43,6 +51,7 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 import TextMenu from "./components/TextMenu.vue";
 import Splash from "./components/Splash.vue";
 import Login from "./components/Login.vue";
+import WindowChrome from "./components/WindowChrome.vue";
 import { api } from "./api";
 
 const chat = useChatStore();
@@ -54,6 +63,7 @@ let entered = false;
 
 function markDesktop() {
   desktop.value = Boolean(window.pywebview);
+  document.documentElement.classList.toggle("desktop", desktop.value);
 }
 
 function startResize(edge, event) {

@@ -1,7 +1,12 @@
-"""打开桌面窗口。如果本机还没有服务，就先把后端拉起来。"""
+"""打开桌面窗口。如果本机还没有服务，就先把后端拉起来。
+
+打包成 exe 之后，服务跑在这个进程里。关掉窗口时，只停掉这次由它启动的服务。
+"""
 
 import ctypes
 import json
+import logging
+import os
 import subprocess
 import sys
 import threading
@@ -12,10 +17,21 @@ from pathlib import Path
 
 import webview
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-URL = "http://127.0.0.1:8787"
-WINDOW_URL = "http://127.0.0.1:8787/?splash=hd"
+
+
+def port() -> int:
+    raw = os.environ.get("HARNESS_PORT", "").strip()
+    try:
+        value = int(raw) if raw else 8787
+    except ValueError:
+        value = 8787
+    return value if 1 <= value <= 65535 else 8787
+
+
+def base_url() -> str:
+    return f"http://127.0.0.1:{port()}"
 GEOMETRY_FILE = Path.home() / "AppData" / "Local" / "DuckHarness" / "window.json"
 _geometry = {"x": None, "y": None, "width": 1280, "height": 840, "maximized": False, "sidebarWidth": 300, "sidebarOpen": True}
 _save_timer = None
@@ -23,18 +39,142 @@ _save_timer = None
 
 def healthy() -> bool:
     try:
-        with urllib.request.urlopen(URL + "/api/health", timeout=1) as response:
+        with urllib.request.urlopen(base_url() + "/api/health", timeout=1) as response:
             return response.status == 200
     except Exception:
         return False
 
 
+def _alert(text: str) -> None:
+    if sys.platform == "win32":
+        ctypes.windll.user32.MessageBoxW(None, text, "Duck Harness", 0x10)
+    else:
+        print(text, file=sys.stderr)
+
+
+def _prepare_log() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    folder = ROOT / "data"
+    folder.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(folder / "launcher.log"),
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        encoding="utf-8",
+    )
+
+
+_job_handle = None
+
+
+def _arm_kill_children() -> None:
+    """进程退出时把这次拉起的命令、MCP 子进程一起关掉。"""
+    global _job_handle
+    if sys.platform != "win32" or _job_handle:
+        return
+    kernel32 = ctypes.windll.kernel32
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", ctypes.c_uint32),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", ctypes.c_uint32),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", ctypes.c_uint32),
+            ("SchedulingClass", ctypes.c_uint32),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = 0x2000
+    if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        kernel32.CloseHandle(job)
+        return
+    process = kernel32.OpenProcess(0x1F0FFF, False, kernel32.GetCurrentProcessId())
+    assigned = bool(kernel32.AssignProcessToJobObject(job, process))
+    kernel32.CloseHandle(process)
+    if not assigned:
+        kernel32.CloseHandle(job)
+        logging.warning("没有挂上退出清理，子进程可能需要手动关掉")
+        return
+    _job_handle = job
+    logging.info("已挂上退出清理")
+
+
+def _serve_in_process():
+    _prepare_log()
+    os.chdir(ROOT)
+    backend = Path(getattr(sys, "_MEIPASS", ROOT)) / "backend"
+    if backend.is_dir() and str(backend) not in sys.path:
+        sys.path.insert(0, str(backend))
+    import uvicorn
+    from app.main import app as fastapi_app
+
+    config = uvicorn.Config(
+        fastapi_app,
+        host="127.0.0.1",
+        port=port(),
+        log_level="info",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, name="harness-server", daemon=False)
+    thread.start()
+    for _ in range(80):
+        if healthy():
+            _arm_kill_children()
+            return server, thread
+        if not thread.is_alive():
+            break
+        time.sleep(0.25)
+    server.should_exit = True
+    thread.join(timeout=5)
+    _alert(f"服务没有在本机 {port()} 端口启动。可以查看 data\\launcher.log。")
+    raise SystemExit(1)
+
+
+def _stop_in_process(owned) -> None:
+    if not owned:
+        return
+    server, thread = owned
+    server.should_exit = True
+    thread.join(timeout=8)
+
+
 def ensure_server():
     if healthy():
         return None
+    if getattr(sys, "frozen", False):
+        return _serve_in_process()
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8787"],
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port())],
         cwd=str(BACKEND),
         creationflags=flags,
         stdout=subprocess.DEVNULL,
@@ -90,6 +230,8 @@ class DesktopApi:
 
 
 def _icon_file() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS")) / "desktop" / "duck.ico"
     return Path(__file__).resolve().parent / "duck.ico"
 
 
@@ -265,11 +407,11 @@ def main():
     _load_geometry()
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DuckHarness.Agent")
     webview.settings["ALLOW_DOWNLOADS"] = True
-    ensure_server()
+    owned = ensure_server()
     placed = _geometry["x"] is not None and _geometry["y"] is not None
     _window = webview.create_window(
         "duck-harness",
-        WINDOW_URL,
+        base_url() + "/?splash=hd",
         js_api=DesktopApi(),
         width=_geometry["width"],
         height=_geometry["height"],
@@ -286,8 +428,15 @@ def main():
     _window.events.resized += _on_resized
     _window.events.moved += _on_moved
     _window.events.shown += _on_shown
-    webview.start(icon=icon)
+    try:
+        webview.start(icon=icon)
+    finally:
+        if getattr(sys, "frozen", False):
+            _stop_in_process(owned)
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()

@@ -124,3 +124,22 @@ def test_users_and_files_stay_apart(db):
             reset_actor(tokens)
         assert key != "sk-ada-only"
         assert ada.get("/api/auth/session").json()["remember"] is True
+
+
+def test_profile_updates_display_name_and_password():
+    with TestClient(app) as guest:
+        guest.post("/api/auth/register", json={"username": "nina", "password": "secret1", "name": "妮娜"})
+        renamed = guest.post("/api/auth/profile", json={"name": " 小妮娜 "})
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "小妮娜"
+        assert guest.get("/api/settings").json()["user"]["name"] == "小妮娜"
+        wrong = guest.post("/api/auth/profile", json={"current_password": "nope", "new_password": "secret2"})
+        assert wrong.status_code == 400
+        changed = guest.post(
+            "/api/auth/profile",
+            json={"current_password": "secret1", "new_password": "secret2"},
+        )
+        assert changed.status_code == 200
+        guest.post("/api/auth/logout")
+        assert guest.post("/api/auth/login", json={"username": "nina", "password": "secret1"}).status_code == 401
+        assert guest.post("/api/auth/login", json={"username": "nina", "password": "secret2"}).status_code == 200

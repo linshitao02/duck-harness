@@ -1,9 +1,8 @@
 from pathlib import Path
 
-from ..config import BACKEND_DIR
+from ..config import ENV_FILE
 
 SENSITIVE_DIR = Path(r"C:\Users\shita\Desktop\账号密码")
-ENV_FILE = BACKEND_DIR / ".env"
 
 
 def _norm(path: Path) -> str:

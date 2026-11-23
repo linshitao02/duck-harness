@@ -65,7 +65,9 @@
 
 ## 快速开始
 
-需要 Python 3.11+ 和 Node.js。数据库用 Python 自带的 SQLite，启动时自动建表，文件在 `data/harness.sqlite`。这份数据库、`data/workspaces/` 里的账号目录、`data/uploads/` 里的会话附件和 `data/secret.key` 都不进仓库。服务器拿到代码后是空库，注册时按用户编号重新生成工作区。
+需要改代码时再安装 Python 3.11+ 和 Node.js。只是打开软件的话，双击根目录的 `Duck Harness.exe` 即可，不用安装 Python、Node，也不用执行 `npm install`。它自带界面和服务。关掉窗口后，这次由它启动的服务会一起退出；本机命令和 MCP 子进程也会跟着停掉。如果 8787 端口上已经有一个服务，窗口会连上现成的，关掉窗口不会结束那个服务。
+
+数据库用 Python 自带的 SQLite，启动时自动建表，文件在 `data/harness.sqlite`。这份数据库、`data/workspaces/` 里的账号目录、`data/uploads/` 里的会话附件和 `data/secret.key` 都不进仓库。服务器拿到代码后是空库，注册时按用户编号重新生成工作区。窗口能打开，是因为 Windows 自带 Edge WebView2。软件里如果要执行 Python 或 npm 命令，那台电脑仍要另外安装对应工具。
 
 ```bat
 cd backend

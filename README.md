@@ -99,7 +99,7 @@ Ubuntu 服务器用 Docker 部署，步骤在 `docker/README.md`。服务器上�
 | `OLLAMA_BASE_URL` | 默认 `http://127.0.0.1:11434` |
 | `HARNESS_WORKSPACE` | 还没有账号时的兜底目录。登录后每个账号使用 `data/workspaces/用户编号` |
 
-服务启动时会自己建表，并补上后来增加的字段。`AUTO_SEED=true` 时，第一次打开会放进一组示例会话。
+服务启动时会自己建表，并补上后来增加的字段。第一次打开是空的会话列表。只有把 `AUTO_SEED` 设为 `true` 时，才会放进一组示例会话。
 
 ### 可选：改用 MySQL
 

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    auto_seed: bool = True
+    auto_seed: bool = False
     enable_scheduler: bool = True
 
 

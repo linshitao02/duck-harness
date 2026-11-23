@@ -16,7 +16,7 @@ services:
       HARNESS_SQLITE_PATH: /data/harness.sqlite
       HARNESS_UPLOAD_DIR: /data/uploads
       HARNESS_WORKSPACE: /workspace
-      AUTO_SEED: ${AUTO_SEED:-true}
+      AUTO_SEED: ${AUTO_SEED:-false}
       ENABLE_SCHEDULER: ${ENABLE_SCHEDULER:-true}
     volumes:
       - duck-data:/data

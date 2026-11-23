@@ -1,0 +1,100 @@
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.thread {
+  flex: 1;
+  height: 0;
+  padding: 24rpx 24rpx 12rpx;
+  box-sizing: border-box;
+}
+
+.empty {
+  margin-top: 80rpx;
+  text-align: center;
+  color: #8e8e93;
+  font-size: 28rpx;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 22rpx;
+}
+
+.msg.user {
+  align-items: flex-end;
+}
+
+.msg.assistant {
+  align-items: flex-start;
+}
+
+.speaker {
+  margin: 0 8rpx 8rpx;
+  color: #636366;
+  font-size: 22rpx;
+}
+
+.bubble {
+  max-width: 86%;
+  padding: 18rpx 22rpx;
+  border-radius: 22rpx;
+}
+
+.user .bubble {
+  background: #ff4b93;
+  color: #fff;
+  border-bottom-right-radius: 8rpx;
+}
+
+.assistant .bubble {
+  background: #fff;
+  color: #1c1c1e;
+  border-bottom-left-radius: 8rpx;
+}
+
+.body {
+  font-size: 30rpx;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bottom-pad {
+  height: 12rpx;
+}
+
+.composer {
+  display: flex;
+  gap: 16rpx;
+  align-items: center;
+  padding: 16rpx 20rpx calc(16rpx + env(safe-area-inset-bottom));
+  background: #fff;
+  border-top: 1rpx solid #ececef;
+}
+
+.box {
+  flex: 1;
+  height: 76rpx;
+  padding: 0 22rpx;
+  border-radius: 18rpx;
+  background: #f4f4f5;
+  font-size: 28rpx;
+}
+
+.send {
+  width: 120rpx;
+  height: 76rpx;
+  border-radius: 18rpx;
+  background: #1c1c1e;
+  color: #fff;
+  font-size: 28rpx;
+}
+
+.send[disabled] {
+  background: #d1d1d6;
+  color: #fff;
+}

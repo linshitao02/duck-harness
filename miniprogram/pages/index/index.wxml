@@ -1,0 +1,22 @@
+<view class="page">
+  <view class="top">
+    <text class="hello">{{userName}}</text>
+    <button class="quiet" bindtap="logout">退出</button>
+  </view>
+  <view wx:if="{{!items.length && !loading}}" class="empty">还没有会话。点下面新建一个。</view>
+  <view
+    wx:for="{{items}}"
+    wx:key="id"
+    class="row"
+    data-id="{{item.id}}"
+    data-title="{{item.title}}"
+    bindtap="open"
+  >
+    <view class="mark" style="background: {{item.icon_color || '#ff4b93'}}">{{item.kind === 'group' ? '群' : '话'}}</view>
+    <view class="copy">
+      <text class="title">{{item.title || '新会话'}}</text>
+      <text class="preview">{{item.preview || '还没有消息'}}</text>
+    </view>
+  </view>
+  <button class="create" bindtap="create">新会话</button>
+</view>

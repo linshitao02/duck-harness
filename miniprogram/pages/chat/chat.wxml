@@ -1,0 +1,24 @@
+<view class="page">
+  <scroll-view class="thread" scroll-y scroll-into-view="{{anchor}}" scroll-with-animation>
+    <view wx:if="{{!items.length}}" class="empty">直接说你要做的事。</view>
+    <view wx:for="{{items}}" wx:key="key" id="m{{index}}" class="msg {{item.role}}">
+      <text wx:if="{{item.speaker}}" class="speaker">{{item.speaker}}</text>
+      <view class="bubble">
+        <text class="body" user-select>{{item.content || (item.pending ? '正在工作' : '')}}</text>
+      </view>
+    </view>
+    <view id="bottom" class="bottom-pad"></view>
+  </scroll-view>
+  <view class="composer">
+    <input
+      class="box"
+      value="{{draft}}"
+      placeholder="发消息"
+      confirm-type="send"
+      disabled="{{sending}}"
+      bindinput="onDraft"
+      bindconfirm="send"
+    />
+    <button class="send" disabled="{{sending || !draft}}" bindtap="send">发送</button>
+  </view>
+</view>

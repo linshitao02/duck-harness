@@ -12,6 +12,17 @@ from .access import accounts_root
 from .models import AuthSession, Conversation, McpServer, Memory, Schedule, Skill, Task, UsageEvent, User
 
 COOKIE = "duck_session"
+
+
+def session_token_from_request(request) -> str:
+    """网页用 Cookie。小程序读不到 HttpOnly Cookie，改带 Authorization: Bearer。"""
+    cookie = request.cookies.get(COOKIE, "") if getattr(request, "cookies", None) else ""
+    if cookie:
+        return cookie
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return (request.headers.get("x-duck-session") or "").strip()
 REMEMBER_DAYS = 30
 SESSION_HOURS = 12
 _USERNAME = re.compile(r"^[\w\u4e00-\u9fff]{2,32}$")

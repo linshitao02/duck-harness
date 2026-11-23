@@ -1,0 +1,20 @@
+<view class="page">
+  <view class="brand">
+    <view class="mark">鸭</view>
+    <view>
+      <text class="name">Duck Harness</text>
+      <text class="sub">登录后看自己的会话</text>
+    </view>
+  </view>
+  <view class="card">
+    <text class="label">服务器</text>
+    <input class="field" value="{{base}}" placeholder="http://127.0.0.1:8787" bindinput="onBase" />
+    <text class="label">用户名</text>
+    <input class="field" value="{{username}}" maxlength="32" bindinput="onUsername" />
+    <text class="label">密码</text>
+    <input class="field" password value="{{password}}" maxlength="72" bindinput="onPassword" />
+    <text wx:if="{{error}}" class="error">{{error}}</text>
+    <button class="go" loading="{{busy}}" disabled="{{busy}}" bindtap="submit">进入</button>
+  </view>
+  <text class="hint">开发者工具里已关闭域名校验。真机预览时把服务器改成这台电脑的局域网地址。</text>
+</view>

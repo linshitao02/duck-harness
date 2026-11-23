@@ -14,7 +14,7 @@ from ..agent.intake import answer_intake, close_intake, start_intake
 from ..agent.loop import cancel_turn, iter_events
 from ..agent.providers import OpenAICompatProvider, collect_text, hub
 from ..agent.tools import broker, load_skills
-from ..auth import COOKIE, drop_session, issue_session, login_user, public_user, read_session, register_user
+from ..auth import COOKIE, drop_session, issue_session, login_user, public_user, read_session, register_user, session_token_from_request
 from ..config import UPLOAD_DIR, get_settings
 from ..db import get_engine, open_session
 from ..models import Attachment, Conversation, McpServer, Message, Skill, Task
@@ -171,8 +171,11 @@ def _remember_cookie(response: Response, token: str, remember: bool) -> None:
     )
 
 
-def _auth_payload(user, remember: bool) -> dict:
-    return {"authenticated": True, "remember": bool(remember), "user": public_user(user)}
+def _auth_payload(user, remember: bool, token: str = "") -> dict:
+    payload = {"authenticated": True, "remember": bool(remember), "user": public_user(user)}
+    if token:
+        payload["token"] = token
+    return payload
 
 
 @router.get("/health")
@@ -207,7 +210,7 @@ def register(body: AuthIn, response: Response, db: Session = Depends(get_db)):
     ensure_user_settings(db, user)
     session = issue_session(db, user, body.remember)
     _remember_cookie(response, session.token, body.remember)
-    return _auth_payload(user, body.remember)
+    return _auth_payload(user, body.remember, session.token)
 
 
 @router.post("/auth/login")
@@ -218,12 +221,12 @@ def login(body: AuthIn, response: Response, db: Session = Depends(get_db)):
     ensure_user_settings(db, user)
     session = issue_session(db, user, body.remember)
     _remember_cookie(response, session.token, body.remember)
-    return _auth_payload(user, body.remember)
+    return _auth_payload(user, body.remember, session.token)
 
 
 @router.get("/auth/session")
 def session_status(request: Request, db: Session = Depends(get_db)):
-    found = read_session(db, request.cookies.get(COOKIE, ""))
+    found = read_session(db, session_token_from_request(request))
     if found is None:
         return {"authenticated": False, "remember": False, "user": None}
     user, row = found
@@ -232,7 +235,7 @@ def session_status(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/auth/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
-    drop_session(db, request.cookies.get(COOKIE, ""))
+    drop_session(db, session_token_from_request(request))
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 

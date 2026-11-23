@@ -37,6 +37,19 @@ def test_login_remember_and_reject_bad_password():
         assert guest.get("/api/conversations").status_code == 401
 
 
+def test_bearer_token_opens_the_api_without_a_cookie():
+    with TestClient(app) as guest:
+        logged = guest.post("/api/auth/login", json={"username": "tester", "password": "tester-pass"})
+        assert logged.status_code == 200
+        token = logged.json()["token"]
+        assert token
+    with TestClient(app) as phone:
+        assert phone.get("/api/conversations").status_code == 401
+        opened = phone.get("/api/conversations", headers={"Authorization": f"Bearer {token}"})
+        assert opened.status_code == 200
+        assert phone.get("/api/auth/session", headers={"Authorization": f"Bearer {token}"}).json()["authenticated"] is True
+
+
 def test_first_register_claims_existing_chats(db):
     user = db.get(User, 1)
     user.username = None
